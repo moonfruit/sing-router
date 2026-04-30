@@ -1,0 +1,83 @@
+{
+  "dns": {
+    "servers": [
+      // Resolver
+      { "tag": "dns-resolver", "type": "udp", "server": "223.5.5.5" },
+      // Direct
+      { "tag": "dns-direct", "type": "h3", "server": "dns.alidns.com", "domain_resolver": "dns-resolver" },
+      // Proxy
+      { "tag": "dns-one", "type": "h3", "server": "one.one.one.one", "detour": "🔰 默认出口" },
+      { "tag": "dns-cloudflare", "type": "h3", "server": "cloudflare-dns.com", "detour": "🔰 默认出口" },
+      { "tag": "dns-proxy", "type": "group", "servers": ["dns-one", "dns-cloudflare"] },
+      // Hosts
+      { "tag": "dns-hosts", "type": "hosts" },
+      // FakeIP
+      { "tag": "dns-fakeip", "type": "fakeip", "inet4_range": "22.0.0.0/8" }
+    ],
+    "rules": [
+      // Hosts
+      {
+        "domain": [
+          "localhost.localdomain",
+          "localhost",
+          "ip6-localhost",
+          "ip6-loopback",
+          "ip6-localnet",
+          "ip6-mcastprefix",
+          "ip6-allnodes",
+          "ip6-allrouters"
+        ],
+        "action": "evaluate",
+        "server": "dns-hosts"
+      },
+      { "match_response": true, "ip_accept_any": true, "action": "respond" },
+      // Clash
+      { "clash_mode": "Direct", "server": "dns-direct" },
+      { "clash_mode": "Global", "server": "dns-fakeip" },
+      // Direct
+      { "action": "evaluate", "server": "dns-direct" },
+      { "rule_set": ["Lan", "FakeIpBypass", "GeoSites@CN"], "action": "respond" },
+      { "match_response": true, "rule_set": "GeoIP@CN", "action": "respond" },
+      { "query_type": ["A", "AAAA"], "server": "dns-fakeip", "rewrite_ttl": 1 }
+    ],
+    "final": "dns-proxy",
+    "reverse_mapping": true,
+    "strategy": "prefer_ipv6"
+  },
+  "route": {
+    "rules": [
+      { "network": "icmp", "outbound": "DIRECT" },
+      { "action": "sniff" },
+      { "protocol": "dns", "action": "hijack-dns" },
+      { "protocol": ["bittorrent", "ntp", "stun"], "outbound": "DIRECT" },
+      { "ip_is_private": true, "outbound": "DIRECT" },
+      { "action": "sniff-override-destination" }
+    ],
+    "rule_set": [
+      {
+        "type": "remote",
+        "tag": "GeoIP@CN",
+        "url": "http://192.168.50.11/private/rules/geoip-cn.srs"
+      },
+      {
+        "type": "remote",
+        "tag": "GeoSites@CN",
+        "url": "http://192.168.50.11/private/rules/geosites-cn.srs"
+      },
+      {
+        "type": "remote",
+        "tag": "Lan",
+        "url": "http://192.168.50.11/private/rules/lan.srs"
+      },
+      {
+        "type": "remote",
+        "tag": "FakeIpBypass",
+        "url": "http://192.168.50.11/private/rules/fakeip-bypass.srs"
+      }
+    ],
+    "auto_detect_interface": true,
+    "default_domain_resolver": "dns-direct",
+    "default_mark": "0x7890"
+  }
+}
+// vim: ft=jsonc
