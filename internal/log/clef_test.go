@@ -55,3 +55,19 @@ func TestOrderedEventNestedEvent(t *testing.T) {
 		t.Fatalf("want %s, got %s", want, out)
 	}
 }
+
+func TestOrderedEventKeysReturnsCopy(t *testing.T) {
+	e := NewEvent()
+	e.Set("x", 1)
+	e.Set("y", 2)
+
+	ks := e.Keys()
+	if len(ks) != 2 || ks[0] != "x" || ks[1] != "y" {
+		t.Fatalf("wrong keys: %v", ks)
+	}
+	// 修改副本不影响原始顺序
+	ks[0] = "mutated"
+	if e.Keys()[0] != "x" {
+		t.Fatal("Keys() returned internal slice, not a defensive copy")
+	}
+}

@@ -1,7 +1,7 @@
 // Package log 提供 sing-router 的结构化日志原语。
 //
 // CLEF (Compact Log Event Format) 用于与 Seq 兼容；事件字段保持插入顺序，
-// 因为 Seq UI 按顺序展示。orderedEvent 是与 sing2seq 一致的轻量实现。
+// 因为 Seq UI 按顺序展示。OrderedEvent 是与 sing2seq 一致的轻量实现。
 package log
 
 import (
