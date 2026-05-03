@@ -254,6 +254,91 @@ func TestPreprocessJSONOutputRetainsKeyOrder(t *testing.T) {
 	}
 }
 
+// ---- 错误分支：覆盖各 stage 的解析失败路径 ----
+
+func TestPreprocessErrorStages(t *testing.T) {
+	cases := []struct {
+		name  string
+		raw   string
+		stage string
+	}{
+		{name: "parse_route", raw: `{"route":"oops"}`, stage: "parse_route"},
+		{name: "parse_outbounds", raw: `{"outbounds":"oops"}`, stage: "parse_outbounds"},
+		{name: "parse_rule_set", raw: `{"route":{"rule_set":"oops"}}`, stage: "parse_rule_set"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			_, err := Preprocess(PreprocessInput{Raw: []byte(c.raw)})
+			if err == nil {
+				t.Fatal("expected error")
+			}
+			var pe *PreprocessError
+			if !errors.As(err, &pe) {
+				t.Fatalf("err type %T", err)
+			}
+			if pe.Stage != c.stage {
+				t.Fatalf("stage: got %q want %q", pe.Stage, c.stage)
+			}
+		})
+	}
+}
+
+// rules 不是数组 + rewriteMap 已填充 → 走 parse_route_rules 路径
+func TestPreprocessParseRouteRulesError(t *testing.T) {
+	in := PreprocessInput{
+		Raw: zoo(t, map[string]any{
+			"route": map[string]any{
+				"rule_set": []any{
+					map[string]any{"tag": "geosites-cn", "url": "https://x/geosites-cn.srs"},
+				},
+				"rules": "not-an-array",
+			},
+		}),
+		BuiltinRuleSetIndex: []RuleSetEntry{
+			{Tag: "GeoSites@CN", URL: "https://x/geosites-cn.srs"},
+		},
+	}
+	_, err := Preprocess(in)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	var pe *PreprocessError
+	if !errors.As(err, &pe) || pe.Stage != "parse_route_rules" {
+		t.Fatalf("stage: %v", err)
+	}
+}
+
+// rules 不是数组 + rewriteMap 为空 → renderZoo 失败 → 包装为 render
+func TestPreprocessRenderError(t *testing.T) {
+	in := PreprocessInput{
+		Raw: zoo(t, map[string]any{
+			"route": map[string]any{
+				"rules": "not-an-array",
+			},
+		}),
+	}
+	_, err := Preprocess(in)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	var pe *PreprocessError
+	if !errors.As(err, &pe) || pe.Stage != "render" {
+		t.Fatalf("stage: %v", err)
+	}
+}
+
+// 直接覆盖 PreprocessError 的 Error() / Unwrap()
+func TestPreprocessErrorMethods(t *testing.T) {
+	inner := errors.New("boom")
+	pe := &PreprocessError{Stage: "x", Err: inner}
+	if pe.Error() != "x: boom" {
+		t.Fatalf("Error: %q", pe.Error())
+	}
+	if !errors.Is(pe, inner) {
+		t.Fatal("Unwrap should chain to inner")
+	}
+}
+
 func contains(haystack []string, needle string) bool {
 	for _, s := range haystack {
 		if s == needle {

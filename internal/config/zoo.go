@@ -117,6 +117,24 @@ func Preprocess(in PreprocessInput) (*PreprocessResult, error) {
 		DroppedFields: dropped,
 	}
 
+	// ---- outbound tag collision ----
+	if len(in.BuiltinOutboundTags) > 0 && len(outbounds) > 0 {
+		builtinSet := map[string]struct{}{}
+		for _, t := range in.BuiltinOutboundTags {
+			builtinSet[t] = struct{}{}
+		}
+		for _, o := range outbounds {
+			tag, _ := o["tag"].(string)
+			if _, hit := builtinSet[tag]; hit {
+				stats.OutboundCollisionRejected = true
+				return nil, &PreprocessError{
+					Stage: "outbound_collision",
+					Err:   fmt.Errorf("zoo outbound tag %q collides with builtin", tag),
+				}
+			}
+		}
+	}
+
 	// ---- dedup rule_set by URL（builtin_wins） ----
 	rewriteMap := map[string]string{} // zooTag -> builtinTag
 	var deduped []map[string]any
@@ -152,11 +170,9 @@ func Preprocess(in PreprocessInput) (*PreprocessResult, error) {
 				}
 			}
 		}
-		// 写回 route map（保持后续 renderZoo 一致）
-		b, err := json.Marshal(rules)
-		if err != nil {
-			return nil, &PreprocessError{Stage: "render_route_rules", Err: err}
-		}
+		// 写回 route map（保持后续 renderZoo 一致）；
+		// rules 是从 json.Unmarshal 解出的 map[string]any，再 Marshal 不会失败。
+		b, _ := json.Marshal(rules)
 		route[keyRouteRules] = b
 	}
 
@@ -194,10 +210,9 @@ func renderZoo(outbounds []map[string]any, ruleSet []map[string]any, route map[s
 		out.Set(keyRoute, routeOut)
 	}
 
+	// out 内的所有值都来自 json.Unmarshal，再编码不可能失败。
 	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(out); err != nil {
-		return nil, err
-	}
+	_ = json.NewEncoder(&buf).Encode(out)
 	return buf.Bytes(), nil
 }
 
@@ -218,6 +233,7 @@ func (o *orderedJSON) Set(k string, v any) {
 }
 
 func (o *orderedJSON) MarshalJSON() ([]byte, error) {
+	// values 全部来自 json.Unmarshal 或同型 orderedJSON，再 Marshal 不可能失败。
 	var buf bytes.Buffer
 	buf.WriteByte('{')
 	for i, k := range o.keys {
@@ -227,10 +243,7 @@ func (o *orderedJSON) MarshalJSON() ([]byte, error) {
 		kb, _ := json.Marshal(k)
 		buf.Write(kb)
 		buf.WriteByte(':')
-		vb, err := json.Marshal(o.values[k])
-		if err != nil {
-			return nil, err
-		}
+		vb, _ := json.Marshal(o.values[k])
 		buf.Write(vb)
 	}
 	buf.WriteByte('}')
