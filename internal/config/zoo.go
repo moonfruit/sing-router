@@ -117,10 +117,29 @@ func Preprocess(in PreprocessInput) (*PreprocessResult, error) {
 		DroppedFields: dropped,
 	}
 
-	// Task 20/21/22 在此基础上插入：
-	// 1. dedup ruleSetEntries by URL → 改写 stats.RuleSetCount / Dropped
-	// 2. rewrite route.rules tag refs
-	// 3. outbound collision check
+	// ---- dedup rule_set by URL（builtin_wins） ----
+	rewriteMap := map[string]string{} // zooTag -> builtinTag
+	var deduped []map[string]any
+	if len(ruleSetEntries) > 0 {
+		builtinByURL := map[string]string{}
+		for _, e := range in.BuiltinRuleSetIndex {
+			builtinByURL[e.URL] = e.Tag
+		}
+		for _, entry := range ruleSetEntries {
+			url, _ := entry["url"].(string)
+			tag, _ := entry["tag"].(string)
+			if builtinTag, ok := builtinByURL[url]; ok && url != "" {
+				rewriteMap[tag] = builtinTag
+				stats.RuleSetDedupDropped++
+				continue
+			}
+			deduped = append(deduped, entry)
+		}
+		ruleSetEntries = deduped
+		stats.RuleSetCount = len(ruleSetEntries)
+	}
+
+	_ = rewriteMap // Task 21 启用
 
 	rendered, err := renderZoo(outbounds, ruleSetEntries, route)
 	if err != nil {
