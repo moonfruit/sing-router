@@ -199,6 +199,54 @@ func TestSupervisorStopThenStart(t *testing.T) {
 	_ = sup.Shutdown(context.Background())
 }
 
+func TestSupervisorAutoRestartUnderCrash(t *testing.T) {
+	binary := fakeSingBox(t)
+	p, clash := freePort(t), freePort(t)
+	var startupCalls, teardownCalls int32
+	sup := New(SupervisorConfig{
+		Emitter:                 newTestEmitter(t),
+		SingBoxBinary:           binary,
+		SingBoxArgs:             []string{"--listen", strconv.Itoa(p), "--clash-port", strconv.Itoa(clash), "--crash-after", "300ms"},
+		ReadyConfig: ReadyConfig{
+			TCPDials:     []string{fmt.Sprintf("127.0.0.1:%d", p)},
+			ClashAPIURL:  fmt.Sprintf("http://127.0.0.1:%d/version", clash),
+			TotalTimeout: 2 * time.Second,
+			Interval:     50 * time.Millisecond,
+		},
+		StartupHook:             func(context.Context) error { atomic.AddInt32(&startupCalls, 1); return nil },
+		TeardownHook:            func(context.Context) error { atomic.AddInt32(&teardownCalls, 1); return nil },
+		BackoffMs:               []int{50, 100, 200},
+		IptablesKeepBackoffLtMs: 10000, // 50ms < 10s → 不拆
+		StopGrace:               1 * time.Second,
+	})
+	if err := sup.Boot(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	runDone := make(chan error, 1)
+	go func() { runDone <- sup.Run(ctx) }()
+
+	// 等几次重启
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if sup.RestartCount() > 0 || atomic.LoadInt32(&startupCalls) >= 2 {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	cancel()
+	<-runDone
+	// Snapshot before Shutdown — Shutdown() unconditionally invokes the
+	// teardown hook for cleanup, which is unrelated to the assertion below.
+	preShutdownTeardown := atomic.LoadInt32(&teardownCalls)
+	_ = sup.Shutdown(context.Background())
+
+	if preShutdownTeardown != 0 {
+		t.Fatal("teardown should not be invoked when backoff < threshold")
+	}
+}
+
 func TestSupervisorShutdownTearsDownAndKills(t *testing.T) {
 	binary := fakeSingBox(t)
 	p, clash := freePort(t), freePort(t)
