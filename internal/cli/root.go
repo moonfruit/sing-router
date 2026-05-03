@@ -30,6 +30,7 @@ func NewRootCmd() *cobra.Command {
 		newDaemonCmd(),
 		newInstallCmd(),
 		newUninstallCmd(),
+		newDoctorCmd(),
 	)
 	return cmd
 }
