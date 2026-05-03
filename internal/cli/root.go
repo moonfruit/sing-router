@@ -27,6 +27,7 @@ func NewRootCmd() *cobra.Command {
 		newShutdownCmd(),
 		newLogsCmd(),
 		newScriptCmd(),
+		newDaemonCmd(),
 	)
 	return cmd
 }
