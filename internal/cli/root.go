@@ -15,6 +15,7 @@ func NewRootCmd() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: false,
 	}
-	cmd.AddCommand(newVersionCmd())
+	cmd.PersistentFlags().String("daemon-url", "http://127.0.0.1:9998", "Daemon HTTP base URL")
+	cmd.AddCommand(newVersionCmd(), newStatusCmd())
 	return cmd
 }
