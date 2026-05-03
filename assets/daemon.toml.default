@@ -1,0 +1,61 @@
+# /opt/home/sing-router/daemon.toml
+# Module A 范围内的全部设置；后续模块会以独立 section 增量加入。
+
+[runtime]
+# rundir = "/opt/home/sing-router"   # 默认 = -D 参数 / 启动 cwd
+sing_box_binary = "bin/sing-box"
+config_dir      = "config.d"
+ui_dir          = "ui"
+
+[http]
+listen          = "127.0.0.1:9998"
+# token         = ""                 # A 阶段不启用，D 阶段加
+
+[log]
+level           = "info"
+file            = "log/sing-router.log"
+rotate          = "internal"
+max_size_mb     = 10
+max_backups     = 5
+disable_color   = false
+include_stack   = false
+
+[supervisor]
+# ready_check_dial_inbounds       = true
+# ready_check_clash_api           = true
+# ready_check_timeout_ms          = 5000
+# ready_check_interval_ms         = 200
+# crash_pre_ready_action          = "fatal"
+# crash_post_ready_backoff_ms     = [1000, 2000, 4000, 8000, 16000, 32000, 64000, 128000, 256000, 512000, 600000]
+# iptables_keep_when_backoff_lt_ms = 10000
+# stop_grace_seconds              = 5
+
+[zoo]
+extract_keys              = ["outbounds", "route.rules", "route.rule_set", "route.final"]
+rule_set_dedup_strategy   = "builtin_wins"
+outbound_collision_action = "reject"
+
+[download]
+mirror_prefix            = ""
+sing_box_url_template    = "https://github.com/SagerNet/sing-box/releases/download/v{version}/sing-box-{version}-linux-arm64.tar.gz"
+sing_box_default_version = "latest"
+cn_list_url              = "https://raw.githubusercontent.com/17mon/china_ip_list/master/china_ip_list.txt"
+http_timeout_seconds     = 60
+http_retries             = 3
+
+[router]
+# dns_port      = 1053
+# redirect_port = 7892
+# route_mark    = "0x7892"
+# bypass_mark   = "0x7890"
+# tun           = "utun"
+# fakeip        = "28.0.0.0/8"   # 必须与 dns.json inet4_range 一致
+# lan           = "192.168.50.0/24"
+# route_table   = 111
+# proxy_ports   = "22,80,443,8080,8443"
+
+[install]
+download_sing_box   = true
+download_cn_list    = true
+download_zashboard  = false
+auto_start          = false
