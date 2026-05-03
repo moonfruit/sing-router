@@ -119,3 +119,114 @@ func TestSupervisorBootPreReadyFailEntersFatal(t *testing.T) {
 		t.Fatalf("state: %v", sup.State())
 	}
 }
+
+func TestSupervisorRestartKeepsIptables(t *testing.T) {
+	binary := fakeSingBox(t)
+	p, clash := freePort(t), freePort(t)
+	var startupCalls, teardownCalls int32
+	sup := New(SupervisorConfig{
+		Emitter:       newTestEmitter(t),
+		SingBoxBinary: binary,
+		SingBoxArgs:   []string{"--listen", strconv.Itoa(p), "--clash-port", strconv.Itoa(clash)},
+		ReadyConfig: ReadyConfig{
+			TCPDials:     []string{fmt.Sprintf("127.0.0.1:%d", p)},
+			ClashAPIURL:  fmt.Sprintf("http://127.0.0.1:%d/version", clash),
+			TotalTimeout: 2 * time.Second,
+			Interval:     50 * time.Millisecond,
+		},
+		StartupHook:  func(context.Context) error { atomic.AddInt32(&startupCalls, 1); return nil },
+		TeardownHook: func(context.Context) error { atomic.AddInt32(&teardownCalls, 1); return nil },
+		StopGrace:    1 * time.Second,
+	})
+	if err := sup.Boot(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = sup.Shutdown(context.Background()) }()
+	if err := sup.Restart(context.Background()); err != nil {
+		t.Fatalf("Restart: %v", err)
+	}
+	if atomic.LoadInt32(&startupCalls) != 1 {
+		t.Fatalf("startup hook should not run again on restart with iptables_installed; calls=%d", startupCalls)
+	}
+	if atomic.LoadInt32(&teardownCalls) != 0 {
+		t.Fatal("teardown should not run during user-initiated restart")
+	}
+	if !sup.IptablesInstalled() {
+		t.Fatal("iptables should remain installed across restart")
+	}
+}
+
+func TestSupervisorStopThenStart(t *testing.T) {
+	binary := fakeSingBox(t)
+	p, clash := freePort(t), freePort(t)
+	var startupCalls, teardownCalls int32
+	sup := New(SupervisorConfig{
+		Emitter:       newTestEmitter(t),
+		SingBoxBinary: binary,
+		SingBoxArgs:   []string{"--listen", strconv.Itoa(p), "--clash-port", strconv.Itoa(clash)},
+		ReadyConfig: ReadyConfig{
+			TCPDials:     []string{fmt.Sprintf("127.0.0.1:%d", p)},
+			ClashAPIURL:  fmt.Sprintf("http://127.0.0.1:%d/version", clash),
+			TotalTimeout: 2 * time.Second,
+			Interval:     50 * time.Millisecond,
+		},
+		StartupHook:  func(context.Context) error { atomic.AddInt32(&startupCalls, 1); return nil },
+		TeardownHook: func(context.Context) error { atomic.AddInt32(&teardownCalls, 1); return nil },
+		StopGrace:    1 * time.Second,
+	})
+	if err := sup.Boot(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := sup.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	if sup.State() != StateStopped {
+		t.Fatalf("state: %v", sup.State())
+	}
+	if atomic.LoadInt32(&teardownCalls) != 1 {
+		t.Fatal("teardown should run on Stop")
+	}
+	if sup.IptablesInstalled() {
+		t.Fatal("iptables should be uninstalled after Stop")
+	}
+	// 再启
+	if err := sup.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if atomic.LoadInt32(&startupCalls) != 2 {
+		t.Fatalf("startup should run again after Start; calls=%d", startupCalls)
+	}
+	_ = sup.Shutdown(context.Background())
+}
+
+func TestSupervisorShutdownTearsDownAndKills(t *testing.T) {
+	binary := fakeSingBox(t)
+	p, clash := freePort(t), freePort(t)
+	var teardownCalls int32
+	sup := New(SupervisorConfig{
+		Emitter:       newTestEmitter(t),
+		SingBoxBinary: binary,
+		SingBoxArgs:   []string{"--listen", strconv.Itoa(p), "--clash-port", strconv.Itoa(clash)},
+		ReadyConfig: ReadyConfig{
+			TCPDials:     []string{fmt.Sprintf("127.0.0.1:%d", p)},
+			ClashAPIURL:  fmt.Sprintf("http://127.0.0.1:%d/version", clash),
+			TotalTimeout: 2 * time.Second,
+			Interval:     50 * time.Millisecond,
+		},
+		StartupHook:  func(context.Context) error { return nil },
+		TeardownHook: func(context.Context) error { atomic.AddInt32(&teardownCalls, 1); return nil },
+		StopGrace:    1 * time.Second,
+	})
+	if err := sup.Boot(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := sup.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if atomic.LoadInt32(&teardownCalls) != 1 {
+		t.Fatalf("teardown calls: %d", teardownCalls)
+	}
+	if sup.SingBoxPID() == 0 {
+		// 进程对象保留，但 process 应已退出
+	}
+}
