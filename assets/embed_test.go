@@ -53,3 +53,19 @@ func TestNatStartSnippetMarkers(t *testing.T) {
 		t.Fatal("snippet should call reapply-rules")
 	}
 }
+
+func TestStartupShellRequiresEnvVars(t *testing.T) {
+	data, err := ReadFile("shell/startup.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(data)
+	for _, name := range []string{"DNS_PORT", "REDIRECT_PORT", "ROUTE_MARK", "BYPASS_MARK",
+		"TUN", "ROUTE_TABLE", "PROXY_PORTS", "FAKEIP", "LAN"} {
+		// 期望脚本通过 : "${NAME:?...}" 强制要求该变量
+		needle := `: "${` + name + `:?`
+		if !strings.Contains(s, needle) {
+			t.Errorf("startup.sh should hard-require %s via : \"${%s:?...}\"", name, name)
+		}
+	}
+}
