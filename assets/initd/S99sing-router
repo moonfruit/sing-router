@@ -1,0 +1,11 @@
+#!/bin/sh
+# Entware init.d script for sing-router (managed by `sing-router install`)
+
+ENABLED=yes
+PROCS=sing-router
+ARGS="daemon -D /opt/home/sing-router"
+PREARGS=""
+DESC="sing-router transparent proxy supervisor"
+PATH=/opt/sbin:/opt/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+. /opt/etc/init.d/rc.func
