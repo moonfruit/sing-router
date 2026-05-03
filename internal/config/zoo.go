@@ -139,7 +139,26 @@ func Preprocess(in PreprocessInput) (*PreprocessResult, error) {
 		stats.RuleSetCount = len(ruleSetEntries)
 	}
 
-	_ = rewriteMap // Task 21 启用
+	// ---- rewrite route.rules[*].rule_set 引用 ----
+	if route != nil && len(rewriteMap) > 0 && route[keyRouteRules] != nil {
+		var rules []map[string]any
+		if err := json.Unmarshal(route[keyRouteRules], &rules); err != nil {
+			return nil, &PreprocessError{Stage: "parse_route_rules", Err: err}
+		}
+		for _, r := range rules {
+			if v, ok := r["rule_set"].(string); ok {
+				if newTag, ok := rewriteMap[v]; ok {
+					r["rule_set"] = newTag
+				}
+			}
+		}
+		// 写回 route map（保持后续 renderZoo 一致）
+		b, err := json.Marshal(rules)
+		if err != nil {
+			return nil, &PreprocessError{Stage: "render_route_rules", Err: err}
+		}
+		route[keyRouteRules] = b
+	}
 
 	rendered, err := renderZoo(outbounds, ruleSetEntries, route)
 	if err != nil {
