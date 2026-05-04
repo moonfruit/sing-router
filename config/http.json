@@ -1,7 +1,0 @@
-{
-  "http_clients": [
-    {
-      "tag": "http-direct"
-    }
-  ]
-}
