@@ -17,7 +17,10 @@ type merlin struct {
 
 func (m *merlin) Kind() Kind { return KindMerlin }
 
+// rundir is unused: the merlin BEGIN/END block resolves
+// `sing-router` and the init.d script via $PATH at trigger time.
 func (m *merlin) InstallHooks(_ string) error {
+	// Read both snippet payloads first so a missing asset never leaves the system half-installed.
 	natPayload, err := readSnippetPayload(m.assets, "firmware/merlin/nat-start.snippet")
 	if err != nil {
 		return err
@@ -97,5 +100,5 @@ func readSnippetPayload(a fs.FS, name string) (string, error) {
 	return strings.Join(out, "\n"), nil
 }
 
-// readFile is a thin os.ReadFile wrapper exposed for tests.
+// readFile is the os.ReadFile seam used by VerifyHooks; replaceable in tests to inject read failures.
 var readFile = os.ReadFile

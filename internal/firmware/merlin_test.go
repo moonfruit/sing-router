@@ -61,6 +61,13 @@ func TestMerlinInstallHooksIdempotent(t *testing.T) {
 	}
 }
 
+func TestMerlinRemoveHooksWhenAbsent(t *testing.T) {
+	m := newTestMerlin(t, fakeNvram{})
+	if err := m.RemoveHooks(); err != nil {
+		t.Fatalf("RemoveHooks on absent hooks should be nil, got %v", err)
+	}
+}
+
 func TestMerlinRemoveHooks(t *testing.T) {
 	m := newTestMerlin(t, fakeNvram{})
 	_ = m.InstallHooks("")
