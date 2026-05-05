@@ -2,7 +2,12 @@
 // doctor 三类操作差异。daemon/supervisor 等运行时不依赖此包。
 package firmware
 
-import "errors"
+import (
+	"errors"
+	"fmt"
+
+	"github.com/moonfruit/sing-router/assets"
+)
 
 // Kind 是已知的固件目标。新增目标只在此处加。
 type Kind string
@@ -32,3 +37,25 @@ type Target interface {
 
 // ErrUnknown 由 Detect 返回，表示当前环境无法被强证为任何已知固件。
 var ErrUnknown = errors.New("firmware: cannot determine target")
+
+// New constructs a Target with default base "/" and embedded assets.
+func New(k Kind) Target {
+	switch k {
+	case KindKoolshare:
+		return &koolshare{base: "/", assets: assets.FS()}
+	case KindMerlin:
+		return &merlin{base: "/", assets: assets.FS(), nvram: shellNvram{}}
+	default:
+		return nil
+	}
+}
+
+// ByName parses a user-facing string into a Target. Empty / unknown strings error.
+func ByName(s string) (Target, error) {
+	switch Kind(s) {
+	case KindKoolshare, KindMerlin:
+		return New(Kind(s)), nil
+	default:
+		return nil, fmt.Errorf("firmware: unknown kind %q (valid: koolshare, merlin)", s)
+	}
+}
