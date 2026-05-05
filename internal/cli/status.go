@@ -51,7 +51,12 @@ func printStatus(w io.Writer, body map[string]any, asJSON bool) error {
 	daemon, _ := body["daemon"].(map[string]any)
 	sb, _ := body["sing_box"].(map[string]any)
 	rules, _ := body["rules"].(map[string]any)
-	fmt.Fprintf(w, "daemon:   state=%v  pid=%v  rundir=%v\n", daemon["state"], daemon["pid"], daemon["rundir"])
+	firmware, _ := body["firmware"].(string)
+	if firmware == "" {
+		firmware = "unknown"
+	}
+	fmt.Fprintf(w, "daemon:   state=%v  pid=%v  rundir=%v  firmware=%s\n",
+		daemon["state"], daemon["pid"], daemon["rundir"], firmware)
 	fmt.Fprintf(w, "sing-box: pid=%v  restart_count=%v\n", sb["pid"], sb["restart_count"])
 	fmt.Fprintf(w, "rules:    iptables_installed=%v\n", rules["iptables_installed"])
 	return nil
