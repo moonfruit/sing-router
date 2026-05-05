@@ -4,6 +4,8 @@ package config
 import (
 	"errors"
 	"os"
+	"regexp"
+	"strings"
 
 	"github.com/BurntSushi/toml"
 )
@@ -87,10 +89,11 @@ type RouterConfig struct {
 }
 
 type InstallConfig struct {
-	DownloadSingBox   bool `toml:"download_sing_box"`
-	DownloadCNList    bool `toml:"download_cn_list"`
-	DownloadZashboard bool `toml:"download_zashboard"`
-	AutoStart         bool `toml:"auto_start"`
+	DownloadSingBox   bool   `toml:"download_sing_box"`
+	DownloadCNList    bool   `toml:"download_cn_list"`
+	DownloadZashboard bool   `toml:"download_zashboard"`
+	AutoStart         bool   `toml:"auto_start"`
+	Firmware          string `toml:"firmware"` // "koolshare" | "merlin" | ""
 }
 
 // LoadDaemonConfig 从给定路径加载 daemon.toml。文件不存在时返回全默认 config，
@@ -147,6 +150,72 @@ func defaultConfig() *DaemonConfig {
 		},
 	}
 	return cfg
+}
+
+// WriteInstallFirmware idempotently sets [install].firmware = "<value>" in the
+// TOML file at path. Preserves all other content (comments, ordering, other keys).
+//
+// If [install] section is missing, it is appended at the end.
+// If firmware key already exists, its value is replaced.
+func WriteInstallFirmware(path, value string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	updated, err := setInstallFirmware(string(data), value)
+	if err != nil {
+		return err
+	}
+	tmp := path + ".new"
+	if err := os.WriteFile(tmp, []byte(updated), 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
+var (
+	reSectionHeader = regexp.MustCompile(`(?m)^\[([a-zA-Z0-9_.]+)\]\s*$`)
+	reFirmwareKey   = regexp.MustCompile(`(?m)^[ \t]*firmware\s*=\s*.*$`)
+)
+
+func setInstallFirmware(s, value string) (string, error) {
+	newLine := `firmware = "` + value + `"`
+
+	matches := reSectionHeader.FindAllStringIndex(s, -1)
+	type sec struct {
+		name       string
+		start, end int
+	}
+	var secs []sec
+	for i, m := range matches {
+		name := reSectionHeader.FindStringSubmatch(s[m[0]:m[1]])[1]
+		end := len(s)
+		if i+1 < len(matches) {
+			end = matches[i+1][0]
+		}
+		secs = append(secs, sec{name: name, start: m[1], end: end})
+	}
+	for _, sec := range secs {
+		if sec.name != "install" {
+			continue
+		}
+		body := s[sec.start:sec.end]
+		if reFirmwareKey.MatchString(body) {
+			body = reFirmwareKey.ReplaceAllString(body, newLine)
+		} else {
+			// Append the line directly after the [install] header (preserves trailing keys).
+			if !strings.HasPrefix(body, "\n") {
+				body = "\n" + body
+			}
+			body = "\n" + newLine + body
+		}
+		return s[:sec.start] + body + s[sec.end:], nil
+	}
+	// No [install] section — append one.
+	if !strings.HasSuffix(s, "\n") {
+		s += "\n"
+	}
+	return s + "\n[install]\n" + newLine + "\n", nil
 }
 
 // applyDefaults 在解码后填补未提供的字段。

@@ -59,3 +59,4 @@ download_sing_box   = true
 download_cn_list    = true
 download_zashboard  = false
 auto_start          = false
+# firmware          = "koolshare"   # 由 `sing-router install` 决议后写入；可手动覆盖

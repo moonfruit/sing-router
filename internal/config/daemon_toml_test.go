@@ -119,3 +119,73 @@ func TestLoadDaemonConfigMissingFile(t *testing.T) {
 		t.Fatal("missing file: defaults expected")
 	}
 }
+
+func TestInstallFirmwareDecode(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "daemon.toml")
+	body := "[install]\nfirmware = \"koolshare\"\n"
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadDaemonConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Install.Firmware != "koolshare" {
+		t.Fatalf("Firmware=%q want koolshare", cfg.Install.Firmware)
+	}
+}
+
+func TestWriteInstallFirmware_AddsKeyWhenAbsent(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "daemon.toml")
+	initial := "[runtime]\nui_dir = \"ui\"\n\n[install]\ndownload_sing_box = true\n"
+	_ = os.WriteFile(path, []byte(initial), 0o644)
+
+	if err := WriteInstallFirmware(path, "koolshare"); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadDaemonConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Install.Firmware != "koolshare" {
+		t.Fatalf("Firmware=%q want koolshare", cfg.Install.Firmware)
+	}
+	if !cfg.Install.DownloadSingBox {
+		t.Errorf("existing key DownloadSingBox lost")
+	}
+}
+
+func TestWriteInstallFirmware_ReplacesExisting(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "daemon.toml")
+	initial := "[install]\nfirmware = \"merlin\"\ndownload_cn_list = true\n"
+	_ = os.WriteFile(path, []byte(initial), 0o644)
+
+	if err := WriteInstallFirmware(path, "koolshare"); err != nil {
+		t.Fatal(err)
+	}
+	cfg, _ := LoadDaemonConfig(path)
+	if cfg.Install.Firmware != "koolshare" {
+		t.Fatalf("Firmware=%q want koolshare", cfg.Install.Firmware)
+	}
+	if !cfg.Install.DownloadCNList {
+		t.Errorf("existing key DownloadCNList lost")
+	}
+}
+
+func TestWriteInstallFirmware_NoSection(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "daemon.toml")
+	initial := "[runtime]\nui_dir = \"ui\"\n"
+	_ = os.WriteFile(path, []byte(initial), 0o644)
+
+	if err := WriteInstallFirmware(path, "koolshare"); err != nil {
+		t.Fatal(err)
+	}
+	cfg, _ := LoadDaemonConfig(path)
+	if cfg.Install.Firmware != "koolshare" {
+		t.Fatalf("Firmware=%q want koolshare", cfg.Install.Firmware)
+	}
+}
