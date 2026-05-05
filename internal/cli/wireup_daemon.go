@@ -121,13 +121,7 @@ func realRunDaemon(ctx context.Context, rundir string) error {
 				filepath.Join(rundir, cfg.Runtime.SingBoxBinary),
 				filepath.Join(rundir, cfg.Runtime.ConfigDir))
 		},
-		StatusExtra: func() map[string]any {
-			return map[string]any{
-				"config": map[string]any{
-					"config_dir": filepath.Join(rundir, cfg.Runtime.ConfigDir),
-				},
-			}
-		},
+		StatusExtra: buildStatusExtra(rundir, cfg.Runtime.ConfigDir, cfg.Install.Firmware),
 		ScriptByName: func(name string) ([]byte, error) {
 			path, ok := scriptMap[name]
 			if !ok {
@@ -136,4 +130,20 @@ func realRunDaemon(ctx context.Context, rundir string) error {
 			return assets.ReadFile(path)
 		},
 	})
+}
+
+// buildStatusExtra produces the StatusExtra hook injected into APIDeps.
+// Returned map keys are merged at the top level of /api/v1/status.
+func buildStatusExtra(rundir, configDir, firmwareKind string) func() map[string]any {
+	if firmwareKind == "" {
+		firmwareKind = "unknown"
+	}
+	return func() map[string]any {
+		return map[string]any{
+			"config": map[string]any{
+				"config_dir": filepath.Join(rundir, configDir),
+			},
+			"firmware": firmwareKind,
+		}
+	}
 }
