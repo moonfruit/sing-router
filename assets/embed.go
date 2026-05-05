@@ -1,5 +1,5 @@
 // Package assets 用 //go:embed 把 sing-router 所需的全部静态资源（默认配置、
-// shell 脚本、init.d 与 jffs 模板、daemon.toml 模板）打进二进制。
+// shell 脚本、init.d 模板、firmware 钩子模板、daemon.toml 模板）打进二进制。
 package assets
 
 import (
