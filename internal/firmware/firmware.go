@@ -5,6 +5,8 @@ package firmware
 import (
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/moonfruit/sing-router/assets"
@@ -67,4 +69,23 @@ func ByName(s string) (Target, error) {
 		}
 		return nil, fmt.Errorf("firmware: unknown kind %q (valid: %s)", s, strings.Join(names, ", "))
 	}
+}
+
+// detectBase is the root used by Detect. Default "/"; tests override.
+var detectBase = "/"
+
+// Detect inspects the host environment for proof of koolshare. Returns
+// ErrUnknown otherwise — does NOT speculatively return KindMerlin.
+func Detect() (Kind, error) {
+	link := filepath.Join(detectBase, "jffs/.asusrouter")
+	if info, err := os.Lstat(link); err == nil && info.Mode()&os.ModeSymlink != 0 {
+		if target, err := os.Readlink(link); err == nil && strings.Contains(target, "/koolshare/") {
+			return KindKoolshare, nil
+		}
+	}
+	kscore := filepath.Join(detectBase, "koolshare/bin/kscore.sh")
+	if info, err := os.Stat(kscore); err == nil && !info.IsDir() && info.Mode()&0o111 != 0 {
+		return KindKoolshare, nil
+	}
+	return "", ErrUnknown
 }

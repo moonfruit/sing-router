@@ -3,6 +3,8 @@ package firmware
 import (
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -64,5 +66,83 @@ func TestNewReturnsCorrectKind(t *testing.T) {
 	}
 	if New(KindMerlin).Kind() != KindMerlin {
 		t.Error("New(KindMerlin) wrong Kind")
+	}
+}
+
+func TestDetectKoolshareViaSymlink(t *testing.T) {
+	old := detectBase
+	t.Cleanup(func() { detectBase = old })
+	dir := t.TempDir()
+	detectBase = dir
+
+	// Create /jffs/.asusrouter -> /koolshare/bin/kscore.sh
+	if err := os.MkdirAll(filepath.Join(dir, "jffs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "koolshare/bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "jffs/.asusrouter")
+	target := filepath.Join(dir, "koolshare/bin/kscore.sh")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := Detect()
+	if err != nil {
+		t.Fatalf("expected nil err, got %v", err)
+	}
+	if got != KindKoolshare {
+		t.Fatalf("Detect=%q want %q", got, KindKoolshare)
+	}
+}
+
+func TestDetectKoolshareViaKscoreFile(t *testing.T) {
+	old := detectBase
+	t.Cleanup(func() { detectBase = old })
+	dir := t.TempDir()
+	detectBase = dir
+
+	kscore := filepath.Join(dir, "koolshare/bin/kscore.sh")
+	if err := os.MkdirAll(filepath.Dir(kscore), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(kscore, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := Detect()
+	if err != nil {
+		t.Fatalf("expected nil err, got %v", err)
+	}
+	if got != KindKoolshare {
+		t.Fatalf("Detect=%q want %q", got, KindKoolshare)
+	}
+}
+
+func TestDetectUnknown(t *testing.T) {
+	old := detectBase
+	t.Cleanup(func() { detectBase = old })
+	detectBase = t.TempDir() // empty
+
+	_, err := Detect()
+	if !errors.Is(err, ErrUnknown) {
+		t.Fatalf("want ErrUnknown, got %v", err)
+	}
+}
+
+func TestDetectKscoreNotExecRejects(t *testing.T) {
+	old := detectBase
+	t.Cleanup(func() { detectBase = old })
+	dir := t.TempDir()
+	detectBase = dir
+
+	kscore := filepath.Join(dir, "koolshare/bin/kscore.sh")
+	_ = os.MkdirAll(filepath.Dir(kscore), 0o755)
+	_ = os.WriteFile(kscore, []byte("not exec"), 0o644)
+
+	_, err := Detect()
+	if !errors.Is(err, ErrUnknown) {
+		t.Fatalf("non-exec kscore.sh should not match; got %v", err)
 	}
 }
