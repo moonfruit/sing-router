@@ -1277,7 +1277,7 @@ func WriteInstallFirmware(path, value string) error {
 
 var (
 	reSectionHeader = regexp.MustCompile(`(?m)^\[([a-zA-Z0-9_.]+)\]\s*$`)
-	reFirmwareKey   = regexp.MustCompile(`(?m)^\s*firmware\s*=\s*.*$`)
+	reFirmwareKey   = regexp.MustCompile(`(?m)^[ \t]*firmware\s*=\s*.*$`)
 )
 
 // (note: imports `regexp` and `strings` must be added to the file's import block.)
