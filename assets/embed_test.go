@@ -17,8 +17,9 @@ func TestDefaultConfigsPresent(t *testing.T) {
 		"config.d.default/outbounds.json",
 		"daemon.toml.default",
 		"initd/S99sing-router",
-		"jffs/nat-start.snippet",
-		"jffs/services-start.snippet",
+		"firmware/koolshare/N99sing-router.sh",
+		"firmware/merlin/nat-start.snippet",
+		"firmware/merlin/services-start.snippet",
 		"shell/startup.sh",
 		"shell/teardown.sh",
 	} {
@@ -42,7 +43,7 @@ func TestDNSFakeIPRangeFixed(t *testing.T) {
 }
 
 func TestNatStartSnippetMarkers(t *testing.T) {
-	data, _ := ReadFile("jffs/nat-start.snippet")
+	data, _ := ReadFile("firmware/merlin/nat-start.snippet")
 	if !strings.Contains(string(data), "# BEGIN sing-router") {
 		t.Fatal("BEGIN marker missing")
 	}
@@ -51,6 +52,26 @@ func TestNatStartSnippetMarkers(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "sing-router reapply-rules") {
 		t.Fatal("snippet should call reapply-rules")
+	}
+}
+
+func TestKoolshareScriptShape(t *testing.T) {
+	data, err := ReadFile("firmware/koolshare/N99sing-router.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(data)
+	if !strings.HasPrefix(s, "#!/bin/sh") {
+		t.Error("missing shebang")
+	}
+	if !strings.Contains(s, "command -v sing-router") {
+		t.Error("missing entware-mount guard")
+	}
+	if !strings.Contains(s, "sing-router reapply-rules") {
+		t.Error("must call reapply-rules")
+	}
+	if !strings.Contains(s, "start_nat") {
+		t.Error("must handle start_nat action")
 	}
 }
 
