@@ -1,7 +1,9 @@
 package cli
 
 import (
+	"bufio"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -9,21 +11,26 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/moonfruit/sing-router/assets"
 	"github.com/moonfruit/sing-router/internal/config"
+	"github.com/moonfruit/sing-router/internal/firmware"
 	"github.com/moonfruit/sing-router/internal/install"
 )
 
+// confirmStdin is overridable for tests.
+var confirmStdin io.Reader = os.Stdin
+
 func newInstallCmd() *cobra.Command {
 	var (
-		rundir          string
-		downloadSingBox bool
-		downloadCNList  bool
-		autoStart       bool
-		mirrorPrefix    string
-		singBoxVersion  string
-		skipJffs        bool
-		dryRun          bool
+		rundir            string
+		downloadSingBox   bool
+		downloadCNList    bool
+		autoStart         bool
+		mirrorPrefix      string
+		singBoxVersion    string
+		firmwareFlag      string
+		yesFlag           bool
+		skipFirmwareHooks bool
+		dryRun            bool
 	)
 	cmd := &cobra.Command{
 		Use:   "install",
@@ -32,7 +39,6 @@ func newInstallCmd() *cobra.Command {
 			if rundir == "" {
 				rundir = "/opt/home/sing-router"
 			}
-			// 读 daemon.toml（若存在），用其 [install] 默认填充未指定的 flag
 			tomlPath := filepath.Join(rundir, "daemon.toml")
 			cfg, _ := config.LoadDaemonConfig(tomlPath)
 			if !cmd.Flags().Changed("download-sing-box") {
@@ -71,20 +77,44 @@ func newInstallCmd() *cobra.Command {
 			}); err != nil {
 				return err
 			}
-			if !skipJffs {
-				natPayload, _ := assets.ReadFile("jffs/nat-start.snippet")
-				svcPayload, _ := assets.ReadFile("jffs/services-start.snippet")
-				if err := run("inject /jffs/scripts/nat-start", func() error {
-					return install.InjectHook("/jffs/scripts/nat-start", "sing-router", payloadOnly(string(natPayload)))
-				}); err != nil {
-					return err
-				}
-				if err := run("inject /jffs/scripts/services-start", func() error {
-					return install.InjectHook("/jffs/scripts/services-start", "sing-router", payloadOnly(string(svcPayload)))
-				}); err != nil {
-					return err
+
+			// 6. Resolve firmware.
+			kind, err := resolveFirmware(firmwareFlag, cfg.Install.Firmware)
+			if err != nil {
+				fmt.Fprintln(cmd.ErrOrStderr(), err.Error())
+				os.Exit(2)
+			}
+
+			// 7. Merlin warning gate.
+			if kind == firmware.KindMerlin && !yesFlag {
+				if !confirmMerlin(cmd.OutOrStdout(), confirmStdin) {
+					return fmt.Errorf("aborted by user")
 				}
 			}
+
+			// 8. Install firmware hooks.
+			if !skipFirmwareHooks {
+				target, err := firmware.ByName(string(kind))
+				if err != nil {
+					return err
+				}
+				if err := run("install firmware hooks ("+string(kind)+")", func() error {
+					return target.InstallHooks(rundir)
+				}); err != nil {
+					return err
+				}
+			} else {
+				fmt.Fprintln(cmd.OutOrStdout(), "→ skipped firmware hook installation (--skip-firmware-hooks)")
+			}
+
+			// 9. Persist firmware decision.
+			if err := run("record firmware="+string(kind)+" in daemon.toml", func() error {
+				return config.WriteInstallFirmware(tomlPath, string(kind))
+			}); err != nil {
+				return err
+			}
+
+			// 10. Optional downloads.
 			if downloadSingBox {
 				version := singBoxVersion
 				if version == "latest" {
@@ -115,6 +145,7 @@ func newInstallCmd() *cobra.Command {
 				}
 			}
 
+			// 11. Auto-start.
 			if autoStart {
 				if err := run("start init.d service", func() error {
 					return runShell("/opt/etc/init.d/S99sing-router", "start")
@@ -137,40 +168,57 @@ func newInstallCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&autoStart, "start", false, "Start init.d service after install")
 	cmd.Flags().StringVar(&mirrorPrefix, "mirror-prefix", "", "Download mirror prefix (e.g. https://ghproxy.com/)")
 	cmd.Flags().StringVar(&singBoxVersion, "sing-box-version", "", "sing-box version to download (default latest)")
-	cmd.Flags().BoolVar(&skipJffs, "skip-jffs", false, "Skip /jffs/scripts/* hook injection")
+	cmd.Flags().StringVar(&firmwareFlag, "firmware", "auto", "Firmware target: auto | koolshare | merlin")
+	cmd.Flags().BoolVar(&yesFlag, "yes", false, "Skip Merlin warning interactive confirmation")
+	cmd.Flags().BoolVar(&skipFirmwareHooks, "skip-firmware-hooks", false, "Skip firmware-specific hook installation")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Print actions without executing")
 	return cmd
 }
 
-// payloadOnly 从 snippet 文件里抽出 BEGIN/END 之间的内容（snippet 文件本身已包含
-// 完整 BEGIN/END，但 InjectHook 期望只接收 payload）。
-func payloadOnly(snippet string) string {
-	var inside bool
-	var out []string
-	for _, l := range strings.Split(snippet, "\n") {
-		if strings.HasPrefix(l, "# BEGIN") {
-			inside = true
-			continue
+// resolveFirmware applies the precedence: CLI flag > daemon.toml > Detect() > reject.
+func resolveFirmware(flag, fromToml string) (firmware.Kind, error) {
+	if flag != "" && flag != "auto" {
+		_, err := firmware.ByName(flag)
+		if err != nil {
+			return "", err
 		}
-		if strings.HasPrefix(l, "# END") {
-			inside = false
-			continue
-		}
-		if inside {
-			out = append(out, l)
+		return firmware.Kind(flag), nil
+	}
+	if fromToml != "" {
+		_, err := firmware.ByName(fromToml)
+		if err == nil {
+			return firmware.Kind(fromToml), nil
 		}
 	}
-	return strings.Join(out, "\n")
+	kind, err := firmware.Detect()
+	if err == nil {
+		return kind, nil
+	}
+	return "", fmt.Errorf(`cannot detect firmware. If this is a Merlin router, run with --firmware=merlin (note: Merlin path is untested, expect manual fixup). If you believe this IS a koolshare router, run with --firmware=koolshare to override the check`)
 }
 
-// resolveLatestSingBoxVersion 当前简单返回硬编码 fallback，避免在 install 阶段强依赖
-// GitHub releases API（B 阶段会做完整版本解析）。
+// confirmMerlin prints the warning and reads y/N from in. Returns true if user agrees.
+func confirmMerlin(out io.Writer, in io.Reader) bool {
+	fmt.Fprintln(out, "WARNING: Merlin firmware support is best-effort and untested.")
+	fmt.Fprintln(out, "         The hook injection logic compiles and unit-tests pass, but no")
+	fmt.Fprintln(out, "         real Merlin device has validated this path. File issues if")
+	fmt.Fprintln(out, "         you hit problems.")
+	fmt.Fprint(out, "Continue? [y/N] ")
+	scanner := bufio.NewScanner(in)
+	if !scanner.Scan() {
+		return false
+	}
+	ans := strings.ToLower(strings.TrimSpace(scanner.Text()))
+	return ans == "y" || ans == "yes"
+}
+
+// payloadOnly removed — moved to internal/firmware/merlin.go (readSnippetPayload).
+
+// resolveLatestSingBoxVersion currently returns a hardcoded fallback (Phase B will resolve via API).
 func resolveLatestSingBoxVersion(_ string) string {
 	return "1.13.5"
 }
 
-// extractSingBox 简化：调用宿主 tar 命令解压并把 sing-box 移到目标位置。
-// 在 RT-BE88U 与本地都假设 entware 提供 tar；不可用时报错。
 func extractSingBox(tarball, target string) error {
 	if _, err := os.Stat(tarball); err != nil {
 		return err
@@ -222,7 +270,6 @@ func runShell(name string, args ...string) error {
 	return osexecCommand(name, args...).Run()
 }
 
-// osexecCommand 默认走 os/exec；测试可替换为 mock。
 var osexecCommand = func(name string, args ...string) interface{ Run() error } {
 	return exec.Command(name, args...)
 }
