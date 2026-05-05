@@ -351,8 +351,8 @@ func TestKoolshareVerifyHooks(t *testing.T) {
 	if len(got) != 1 || got[0].Present {
 		t.Fatalf("expected 1 absent check, got %+v", got)
 	}
-	if got[0].Kind != "file" {
-		t.Fatalf("expected Kind=file, got %q", got[0].Kind)
+	if got[0].Type != "file" {
+		t.Fatalf("expected Type=file, got %q", got[0].Type)
 	}
 
 	// install then verify present
@@ -429,7 +429,7 @@ func (k *koolshare) VerifyHooks() []HookCheck {
 	info, err := os.Stat(target)
 	present := err == nil && !info.IsDir() && info.Mode()&0o111 != 0
 	return []HookCheck{{
-		Kind:     "file",
+		Type:     "file",
 		Path:     target,
 		Required: true,
 		Present:  present,
@@ -560,7 +560,7 @@ func TestMerlinVerifyHooks(t *testing.T) {
 	if len(checks) != 3 {
 		t.Fatalf("want 3 checks, got %d", len(checks))
 	}
-	if checks[0].Kind != "nvram" || checks[0].Path != "jffs2_scripts" {
+	if checks[0].Type != "nvram" || checks[0].Path != "jffs2_scripts" {
 		t.Errorf("first check should be nvram[jffs2_scripts], got %+v", checks[0])
 	}
 	if !checks[0].Present {
@@ -663,7 +663,7 @@ func (m *merlin) VerifyHooks() []HookCheck {
 	jffsVal, _ := m.nvram.Get("jffs2_scripts")
 	checks := []HookCheck{
 		{
-			Kind:     "nvram",
+			Type:     "nvram",
 			Path:     "jffs2_scripts",
 			Required: true,
 			Present:  jffsVal == "1",
@@ -675,7 +675,7 @@ func (m *merlin) VerifyHooks() []HookCheck {
 		data, err := readFile(path)
 		present := err == nil && strings.Contains(string(data), "# BEGIN sing-router")
 		checks = append(checks, HookCheck{
-			Kind:     "file",
+			Type:     "file",
 			Path:     path,
 			Required: true,
 			Present:  present,
@@ -2054,7 +2054,7 @@ func runDoctorChecks(rundir string) []doctorCheck {
 }
 
 func doctorHookCheck(hc firmware.HookCheck) doctorCheck {
-	prefix := hc.Kind + ":"
+	prefix := hc.Type + ":"
 	name := prefix + " " + hc.Path
 	if hc.Present {
 		return doctorCheck{Name: name, Status: "pass", Detail: hc.Note}
@@ -2135,28 +2135,28 @@ import (
 )
 
 func TestDoctorHookCheck_PresentRequiredPasses(t *testing.T) {
-	got := doctorHookCheck(firmware.HookCheck{Kind: "file", Path: "/x", Required: true, Present: true, Note: "n"})
+	got := doctorHookCheck(firmware.HookCheck{Type: "file", Path: "/x", Required: true, Present: true, Note: "n"})
 	if got.Status != "pass" {
 		t.Fatalf("status=%q want pass", got.Status)
 	}
 }
 
 func TestDoctorHookCheck_AbsentRequiredFails(t *testing.T) {
-	got := doctorHookCheck(firmware.HookCheck{Kind: "file", Path: "/x", Required: true, Present: false})
+	got := doctorHookCheck(firmware.HookCheck{Type: "file", Path: "/x", Required: true, Present: false})
 	if got.Status != "fail" {
 		t.Fatalf("status=%q want fail", got.Status)
 	}
 }
 
 func TestDoctorHookCheck_AbsentOptionalWarns(t *testing.T) {
-	got := doctorHookCheck(firmware.HookCheck{Kind: "file", Path: "/x", Required: false, Present: false})
+	got := doctorHookCheck(firmware.HookCheck{Type: "file", Path: "/x", Required: false, Present: false})
 	if got.Status != "warn" {
 		t.Fatalf("status=%q want warn", got.Status)
 	}
 }
 
 func TestDoctorHookCheck_NameIncludesKindPrefix(t *testing.T) {
-	got := doctorHookCheck(firmware.HookCheck{Kind: "nvram", Path: "jffs2_scripts", Required: true, Present: true})
+	got := doctorHookCheck(firmware.HookCheck{Type: "nvram", Path: "jffs2_scripts", Required: true, Present: true})
 	if got.Name != "nvram: jffs2_scripts" {
 		t.Fatalf("name=%q want %q", got.Name, "nvram: jffs2_scripts")
 	}

@@ -39,7 +39,7 @@ const (
 
 // HookCheck 是 doctor 用的只读体检结果项。
 type HookCheck struct {
-    Kind     string // "file" | "nvram"
+    Type     string // "file" | "nvram" — what kind of medium this check inspects
     Path     string // 文件路径或 nvram 键名
     Required bool   // 缺失即体检失败
     Present  bool
@@ -224,7 +224,7 @@ func (k *koolshare) VerifyHooks() []HookCheck {
     info, err := os.Stat(target)
     present := err == nil && !info.IsDir() && info.Mode()&0o111 != 0
     return []HookCheck{{
-        Kind:     "file",
+        Type:     "file",
         Path:     target,
         Required: true,
         Present:  present,
@@ -274,21 +274,21 @@ V/S/T/M/U hook 的触发时机均不在我们想要的"sing-router 已运行 + i
 ```go
 []HookCheck{
     {
-        Kind:     "nvram",
+        Type:     "nvram",
         Path:     "jffs2_scripts",
         Required: true,
         Present:  nvramReader.Get("jffs2_scripts") == "1",
         Note:     "Merlin custom scripts must be enabled or hooks won't fire",
     },
     {
-        Kind:     "file",
+        Type:     "file",
         Path:     filepath.Join(m.base, "jffs/scripts/nat-start"),
         Required: true,
         Present:  含我们的 BEGIN/END 块,
         Note:     "Merlin nat-start hook (replays iptables on WAN/firewall restart)",
     },
     {
-        Kind:     "file",
+        Type:     "file",
         Path:     filepath.Join(m.base, "jffs/scripts/services-start"),
         Required: true,
         Present:  含我们的 BEGIN/END 块,
@@ -297,7 +297,7 @@ V/S/T/M/U hook 的触发时机均不在我们想要的"sing-router 已运行 + i
 }
 ```
 
-doctor 渲染层按 `Kind` 选不同前缀（`file:` / `nvram:`）。
+doctor 渲染层按 `Type` 选不同前缀（`file:` / `nvram:`）。
 
 ### 4.3 `nvramReader` 接口
 
@@ -410,7 +410,7 @@ Continue? [y/N]
 + <foreach Target.VerifyHooks() check>                       yes/warn
 ```
 
-doctor 渲染层按 `HookCheck.Kind` 选前缀：
+doctor 渲染层按 `HookCheck.Type` 选前缀：
 
 ```
 [OK]   file: /koolshare/init.d/N99sing-router.sh
