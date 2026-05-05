@@ -1,6 +1,14 @@
 package firmware
 
-import "testing"
+import (
+	"errors"
+	"testing"
+)
+
+// fakeNvram is an in-memory nvramReader used by tests across this package.
+type fakeNvram map[string]string
+
+func (f fakeNvram) Get(key string) (string, error) { return f[key], nil }
 
 func TestFakeNvramGet(t *testing.T) {
 	f := fakeNvram{"jffs2_scripts": "1", "model": "RT-BE88U"}
@@ -29,5 +37,20 @@ func TestShellNvramGetTrimmed(t *testing.T) {
 	got, err := (shellNvram{}).Get("extendno")
 	if err != nil || got != "37094_koolcenter" {
 		t.Fatalf("got (%q, %v) want (37094_koolcenter, nil)", got, err)
+	}
+}
+
+func TestShellNvramGetPropagatesError(t *testing.T) {
+	old := nvramExec
+	t.Cleanup(func() { nvramExec = old })
+	nvramExec = func(args ...string) ([]byte, error) {
+		return nil, errors.New("nvram: exit 1")
+	}
+	got, err := (shellNvram{}).Get("anything")
+	if err == nil {
+		t.Fatal("expected error to propagate")
+	}
+	if got != "" {
+		t.Fatalf("on error, return value should be empty; got %q", got)
 	}
 }

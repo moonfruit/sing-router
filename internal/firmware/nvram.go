@@ -11,7 +11,7 @@ type nvramReader interface {
 	Get(key string) (string, error)
 }
 
-// nvramExec 是 shellNvram 真正调用的命令；测试可替换。
+// nvramExec is the function that shellNvram actually invokes (var, not func, so tests can swap it).
 var nvramExec = func(args ...string) ([]byte, error) {
 	return exec.Command("nvram", args...).Output()
 }
@@ -25,8 +25,3 @@ func (shellNvram) Get(key string) (string, error) {
 	}
 	return strings.TrimRight(string(out), "\r\n"), nil
 }
-
-// fakeNvram 仅用于测试。
-type fakeNvram map[string]string
-
-func (f fakeNvram) Get(key string) (string, error) { return f[key], nil }
