@@ -2,6 +2,7 @@ package firmware
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 )
 
@@ -21,9 +22,8 @@ func TestKindString(t *testing.T) {
 }
 
 func TestErrUnknownIsSentinel(t *testing.T) {
-	wrapped := errors.New("x: " + ErrUnknown.Error())
-	_ = wrapped
-	if !errors.Is(ErrUnknown, ErrUnknown) {
-		t.Fatal("ErrUnknown should match itself via errors.Is")
+	wrapped := fmt.Errorf("detect failed: %w", ErrUnknown)
+	if !errors.Is(wrapped, ErrUnknown) {
+		t.Fatal("errors.Is(wrapped, ErrUnknown) should match through %w wrapping")
 	}
 }

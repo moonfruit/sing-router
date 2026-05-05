@@ -14,7 +14,7 @@ const (
 
 // HookCheck 是 doctor 用的只读体检结果项。
 type HookCheck struct {
-	Kind     string // "file" | "nvram"
+	Type     string // "file" | "nvram" — what kind of medium this check inspects
 	Path     string // 文件路径或 nvram 键名
 	Required bool
 	Present  bool
