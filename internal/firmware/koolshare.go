@@ -17,6 +17,8 @@ type koolshare struct {
 
 func (k *koolshare) Kind() Kind { return KindKoolshare }
 
+// rundir is unused: the koolshare hook is self-contained and resolves
+// `sing-router` via $PATH at trigger time, not via a baked-in path.
 func (k *koolshare) InstallHooks(_ string) error {
 	script, err := fs.ReadFile(k.assets, koolshareAssetPath)
 	if err != nil {
@@ -50,7 +52,11 @@ func (k *koolshare) VerifyHooks() []HookCheck {
 	}}
 }
 
-// atomicWriteExec writes data to path via tmp+rename and chmods to mode.
+// atomicWriteExec writes data to path via tmp+rename and forces the mode
+// bits on disk. Chmod is explicit because os.WriteFile applies its mode
+// argument through the process umask; Chmod bypasses umask and guarantees
+// the target lands with the exact bits requested (matters for 0o755 hooks
+// on routers where the daemon's umask isn't well-defined).
 func atomicWriteExec(path string, data []byte, mode os.FileMode) error {
 	tmp := path + ".new"
 	if err := os.WriteFile(tmp, data, mode); err != nil {
