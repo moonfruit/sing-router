@@ -9,11 +9,14 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+
+	"github.com/moonfruit/sing-router/internal/config"
+	"github.com/moonfruit/sing-router/internal/firmware"
 )
 
 type doctorCheck struct {
 	Name   string `json:"name"`
-	Status string `json:"status"` // pass | warn | fail
+	Status string `json:"status"` // pass | warn | fail | info
 	Detail string `json:"detail,omitempty"`
 }
 
@@ -58,10 +61,21 @@ func runDoctorChecks(rundir string) []doctorCheck {
 	out = append(out, checkExistsAs(filepath.Join(rundir, "config.d", "zoo.json"), "config.d/zoo.json", "warn"))
 	out = append(out, checkExistsAs(filepath.Join(rundir, "var", "cn.txt"), "var/cn.txt", "warn"))
 	out = append(out, checkExistsExec("/opt/etc/init.d/S99sing-router"))
-	out = append(out, checkJffsHook("/jffs/scripts/nat-start"))
-	out = append(out, checkJffsHook("/jffs/scripts/services-start"))
 
-	// dns.json inet4_range 与 routing FAKEIP 一致性检查（spec 6.4 hint）
+	// Firmware target + hook checks.
+	cfg, _ := config.LoadDaemonConfig(filepath.Join(rundir, "daemon.toml"))
+	kind := cfg.Install.Firmware
+	if kind == "" {
+		kind = "unknown"
+	}
+	out = append(out, doctorCheck{Name: "firmware target", Status: "info", Detail: kind})
+	if target, err := firmware.ByName(kind); err == nil {
+		for _, hc := range target.VerifyHooks() {
+			out = append(out, doctorHookCheck(hc))
+		}
+	}
+
+	// dns.json inet4_range consistency
 	dnsPath := filepath.Join(rundir, "config.d", "dns.json")
 	if fileExists(dnsPath) {
 		data, _ := os.ReadFile(dnsPath)
@@ -71,7 +85,7 @@ func runDoctorChecks(rundir string) []doctorCheck {
 			out = append(out, doctorCheck{Name: "dns.json inet4_range", Status: "pass"})
 		}
 	}
-	// log.timestamp = true（vendored sing2seq parser 硬依赖）
+	// log.timestamp = true
 	logPath := filepath.Join(rundir, "config.d", "log.json")
 	if fileExists(logPath) {
 		data, _ := os.ReadFile(logPath)
@@ -82,6 +96,19 @@ func runDoctorChecks(rundir string) []doctorCheck {
 		}
 	}
 	return out
+}
+
+func doctorHookCheck(hc firmware.HookCheck) doctorCheck {
+	prefix := hc.Type + ":"
+	name := prefix + " " + hc.Path
+	if hc.Present {
+		return doctorCheck{Name: name, Status: "pass", Detail: hc.Note}
+	}
+	status := "warn"
+	if hc.Required {
+		status = "fail"
+	}
+	return doctorCheck{Name: name, Status: status, Detail: hc.Note}
 }
 
 func checkExistsExec(path string) doctorCheck {
@@ -113,17 +140,6 @@ func checkExistsAs(path, label, warnOrFail string) doctorCheck {
 	return doctorCheck{Name: label, Status: "pass"}
 }
 
-func checkJffsHook(path string) doctorCheck {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return doctorCheck{Name: path, Status: "fail", Detail: err.Error()}
-	}
-	if !strings.Contains(string(data), "BEGIN sing-router") {
-		return doctorCheck{Name: path, Status: "fail", Detail: "BEGIN sing-router block missing"}
-	}
-	return doctorCheck{Name: path, Status: "pass"}
-}
-
 func printDoctor(w io.Writer, checks []doctorCheck, asJSON bool) error {
 	if asJSON {
 		return json.NewEncoder(w).Encode(checks)
@@ -135,6 +151,8 @@ func printDoctor(w io.Writer, checks []doctorCheck, asJSON bool) error {
 			marker = "WARN"
 		case "fail":
 			marker = "FAIL"
+		case "info":
+			marker = "INFO"
 		}
 		if c.Detail == "" {
 			fmt.Fprintf(w, "  %s  %s\n", marker, c.Name)
