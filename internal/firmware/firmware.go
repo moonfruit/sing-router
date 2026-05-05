@@ -5,6 +5,7 @@ package firmware
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/moonfruit/sing-router/assets"
 )
@@ -16,6 +17,10 @@ const (
 	KindKoolshare Kind = "koolshare"
 	KindMerlin    Kind = "merlin"
 )
+
+// allKinds enumerates known firmware targets. Keep in sync with the const block above.
+// Used for human-readable error messages in ByName.
+var allKinds = []Kind{KindKoolshare, KindMerlin}
 
 // HookCheck 是 doctor 用的只读体检结果项。
 type HookCheck struct {
@@ -46,7 +51,7 @@ func New(k Kind) Target {
 	case KindMerlin:
 		return &merlin{base: "/", assets: assets.FS(), nvram: shellNvram{}}
 	default:
-		return nil
+		panic(fmt.Sprintf("firmware.New: unsupported Kind %q (use ByName for user input)", k))
 	}
 }
 
@@ -56,6 +61,10 @@ func ByName(s string) (Target, error) {
 	case KindKoolshare, KindMerlin:
 		return New(Kind(s)), nil
 	default:
-		return nil, fmt.Errorf("firmware: unknown kind %q (valid: koolshare, merlin)", s)
+		names := make([]string, len(allKinds))
+		for i, k := range allKinds {
+			names[i] = string(k)
+		}
+		return nil, fmt.Errorf("firmware: unknown kind %q (valid: %s)", s, strings.Join(names, ", "))
 	}
 }

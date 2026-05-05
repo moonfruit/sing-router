@@ -36,6 +36,7 @@ func TestByName(t *testing.T) {
 	}{
 		{"koolshare", KindKoolshare, false},
 		{"merlin", KindMerlin, false},
+		{"Koolshare", "", true},
 		{"openwrt", "", true},
 		{"", "", true},
 	}
