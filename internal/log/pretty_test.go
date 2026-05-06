@@ -5,15 +5,17 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/moonfruit/sing2seq/clef"
 )
 
-func mustParse(t *testing.T, s string) *OrderedEvent {
+func mustParse(t *testing.T, s string) *clef.Event {
 	t.Helper()
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(s), &raw); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	e := NewEvent()
+	e := clef.NewEvent()
 	var any map[string]any
 	_ = json.Unmarshal([]byte(s), &any)
 	keys := orderedKeys(s)

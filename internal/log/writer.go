@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"sort"
 	"sync"
+
+	"github.com/moonfruit/sing2seq/clef"
 )
 
 // WriterConfig 配置 Writer 的轮转行为。
@@ -62,7 +64,7 @@ func (w *Writer) openActive() error {
 }
 
 // Write 序列化事件并追加一行；必要时触发轮转。
-func (w *Writer) Write(e *OrderedEvent) error {
+func (w *Writer) Write(e *clef.Event) error {
 	data, err := json.Marshal(e)
 	if err != nil {
 		return err

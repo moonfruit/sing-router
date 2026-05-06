@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/moonfruit/sing2seq/clef"
 	"github.com/spf13/cobra"
 
 	log "github.com/moonfruit/sing-router/internal/log"
@@ -98,7 +99,7 @@ func streamLogs(out io.Writer, r io.Reader, asJSON bool, tz *time.Location) erro
 
 // decodeOrderedEvent 用 json.Decoder 保留键的相对顺序（Go 标准库不保证 map 顺序，
 // 因此用 RawMessage 的两遍解析 + 顺序记录恢复）。
-func decodeOrderedEvent(line string) (*log.OrderedEvent, error) {
+func decodeOrderedEvent(line string) (*clef.Event, error) {
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(line), &raw); err != nil {
 		return nil, err
@@ -107,7 +108,7 @@ func decodeOrderedEvent(line string) (*log.OrderedEvent, error) {
 	if err != nil {
 		return nil, err
 	}
-	ev := log.NewEvent()
+	ev := clef.NewEvent()
 	for _, k := range keys {
 		if rv, ok := raw[k]; ok {
 			var v any

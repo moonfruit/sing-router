@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/moonfruit/sing2seq/clef"
-	log "github.com/moonfruit/sing-router/internal/log"
 )
 
 // SupervisorConfig 控制 supervisor 行为。
@@ -165,7 +164,7 @@ func (s *Supervisor) consumeStderr(r io.Reader) {
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 64*1024), 4*1024*1024)
 	for sc.Scan() {
-		ev := log.ParseSingBoxLine(sc.Text())
+		ev := clef.ParseSingBoxLine(sc.Text())
 		if ev == nil {
 			continue
 		}
