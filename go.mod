@@ -4,6 +4,7 @@ go 1.26.2
 
 require (
 	github.com/BurntSushi/toml v1.4.0
+	github.com/moonfruit/sing2seq v1.3.0
 	github.com/spf13/cobra v1.10.2
 )
 

@@ -9,7 +9,7 @@ import (
 	"syscall"
 	"time"
 
-	log "github.com/moonfruit/sing-router/internal/log"
+	"github.com/moonfruit/sing2seq/clef"
 )
 
 // Options 是 daemon 入口接受的参数。
@@ -17,7 +17,7 @@ type Options struct {
 	Rundir       string
 	Listen       string
 	Version      string
-	Emitter      *log.Emitter
+	Emitter      *clef.Emitter
 	Supervisor   *Supervisor
 	ReapplyRules func(context.Context) error
 	CheckConfig  func(context.Context) error

@@ -47,15 +47,13 @@ func realRunDaemon(ctx context.Context, rundir string) error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = writer.Close() }()
-	bus := log.NewBus(4096)
-	defer bus.Close()
-	em := log.NewEmitter(log.EmitterConfig{
+	stack := log.NewEmitterStack(log.StackConfig{
 		Source:   "daemon",
 		MinLevel: level,
 		Writer:   writer,
-		Bus:      bus,
 	})
+	defer func() { _ = stack.Close() }()
+	em := stack.Emitter
 	em.Info("supervisor", "supervisor.boot.started", "starting daemon at {Rundir}", map[string]any{"Rundir": rundir})
 
 	routing := config.LoadRouting(cfg)

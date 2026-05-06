@@ -6,13 +6,13 @@ import (
 	"net/http"
 	"time"
 
-	log "github.com/moonfruit/sing-router/internal/log"
+	"github.com/moonfruit/sing2seq/clef"
 )
 
 // APIDeps 是 HTTP handlers 依赖的接口集；测试可注入 mock。
 type APIDeps struct {
 	Supervisor *Supervisor
-	Emitter    *log.Emitter
+	Emitter    *clef.Emitter
 	Version    string
 	Rundir     string
 

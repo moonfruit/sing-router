@@ -5,6 +5,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/moonfruit/sing2seq/clef"
 )
 
 // PrettyOptions 控制 Pretty 渲染。
@@ -16,7 +18,7 @@ type PrettyOptions struct {
 var placeholderRe = regexp.MustCompile(`\{([A-Za-z_][A-Za-z0-9_]*)\}`)
 
 // Pretty 把 CLEF 事件渲染为人类可读的一行（不含末尾换行）。
-func Pretty(e *OrderedEvent, opts PrettyOptions) string {
+func Pretty(e *clef.Event, opts PrettyOptions) string {
 	if opts.LocalTZ == nil {
 		opts.LocalTZ = time.Local
 	}
@@ -83,7 +85,7 @@ func Pretty(e *OrderedEvent, opts PrettyOptions) string {
 	return sb.String()
 }
 
-func renderTemplate(e *OrderedEvent, tmpl string) string {
+func renderTemplate(e *clef.Event, tmpl string) string {
 	return placeholderRe.ReplaceAllStringFunc(tmpl, func(match string) string {
 		name := match[1 : len(match)-1]
 		if v, ok := e.Get(name); ok {
@@ -93,7 +95,7 @@ func renderTemplate(e *OrderedEvent, tmpl string) string {
 	})
 }
 
-func getString(e *OrderedEvent, key string) (string, bool) {
+func getString(e *clef.Event, key string) (string, bool) {
 	v, ok := e.Get(key)
 	if !ok {
 		return "", false

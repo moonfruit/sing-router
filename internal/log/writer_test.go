@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/moonfruit/sing2seq/clef"
 )
 
 func newTestWriter(t *testing.T, maxSize int64, maxBackups int) (*Writer, string) {
@@ -28,7 +30,7 @@ func newTestWriter(t *testing.T, maxSize int64, maxBackups int) (*Writer, string
 
 func TestWriterAppendsLines(t *testing.T) {
 	w, path := newTestWriter(t, 1024, 3)
-	e := NewEvent()
+	e := clef.NewEvent()
 	e.Set("@l", "Information")
 	e.Set("Source", "daemon")
 	e.Set("@mt", "hello {Name}")
@@ -60,7 +62,7 @@ func TestWriterRotatesAtMaxSize(t *testing.T) {
 	w, path := newTestWriter(t, 200, 3)
 	big := strings.Repeat("x", 80)
 	for i := 0; i < 10; i++ {
-		e := NewEvent()
+		e := clef.NewEvent()
 		e.Set("@l", "Information")
 		e.Set("@mt", big)
 		if err := w.Write(e); err != nil {
@@ -100,7 +102,7 @@ func TestWriterPrunesOldBackups(t *testing.T) {
 	w, path := newTestWriter(t, 100, 2)
 	big := strings.Repeat("y", 60)
 	for i := 0; i < 30; i++ {
-		e := NewEvent()
+		e := clef.NewEvent()
 		e.Set("@l", "Information")
 		e.Set("@mt", big)
 		_ = w.Write(e)
@@ -123,7 +125,7 @@ func TestWriterPrunesOldBackups(t *testing.T) {
 func TestWriterGzipBackupReadable(t *testing.T) {
 	w, path := newTestWriter(t, 80, 3)
 	for i := 0; i < 6; i++ {
-		e := NewEvent()
+		e := clef.NewEvent()
 		e.Set("@l", "Information")
 		e.Set("@mt", strings.Repeat("z", 40))
 		_ = w.Write(e)
@@ -152,7 +154,7 @@ func TestWriterGzipBackupReadable(t *testing.T) {
 
 func TestWriterReopenOnSIGUSR1Equivalent(t *testing.T) {
 	w, path := newTestWriter(t, 1024, 3)
-	e := NewEvent()
+	e := clef.NewEvent()
 	e.Set("@l", "Information")
 	e.Set("@mt", "first")
 	_ = w.Write(e)
@@ -165,7 +167,7 @@ func TestWriterReopenOnSIGUSR1Equivalent(t *testing.T) {
 	if err := w.Reopen(); err != nil {
 		t.Fatalf("Reopen: %v", err)
 	}
-	e2 := NewEvent()
+	e2 := clef.NewEvent()
 	e2.Set("@l", "Information")
 	e2.Set("@mt", "after-reopen")
 	_ = w.Write(e2)

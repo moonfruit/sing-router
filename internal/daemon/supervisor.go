@@ -11,12 +11,12 @@ import (
 	"syscall"
 	"time"
 
-	log "github.com/moonfruit/sing-router/internal/log"
+	"github.com/moonfruit/sing2seq/clef"
 )
 
 // SupervisorConfig 控制 supervisor 行为。
 type SupervisorConfig struct {
-	Emitter       *log.Emitter
+	Emitter       *clef.Emitter
 	SingBoxBinary string
 	SingBoxArgs   []string
 	SingBoxDir    string // 子进程 cwd
@@ -164,7 +164,7 @@ func (s *Supervisor) consumeStderr(r io.Reader) {
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 64*1024), 4*1024*1024)
 	for sc.Scan() {
-		ev := log.ParseSingBoxLine(sc.Text())
+		ev := clef.ParseSingBoxLine(sc.Text())
 		if ev == nil {
 			continue
 		}
