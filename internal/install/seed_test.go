@@ -12,7 +12,14 @@ func TestSeedWritesDefaultsWhenMissing(t *testing.T) {
 	if err := EnsureLayout(dir); err != nil {
 		t.Fatal(err)
 	}
-	if err := SeedDefaults(dir); err != nil {
+	vars := TemplateVars{
+		DownloadSingBox:   true,
+		DownloadCNList:    false,
+		DownloadZashboard: false,
+		AutoStart:         true,
+		Firmware:          "koolshare",
+	}
+	if err := SeedDefaults(dir, vars); err != nil {
 		t.Fatal(err)
 	}
 	for _, p := range []string{
@@ -32,6 +39,38 @@ func TestSeedWritesDefaultsWhenMissing(t *testing.T) {
 	}
 }
 
+func TestSeedRendersTemplateVars(t *testing.T) {
+	dir := t.TempDir()
+	if err := EnsureLayout(dir); err != nil {
+		t.Fatal(err)
+	}
+	vars := TemplateVars{
+		DownloadSingBox:   true,
+		DownloadCNList:    false,
+		DownloadZashboard: false,
+		AutoStart:         true,
+		Firmware:          "koolshare",
+	}
+	if err := SeedDefaults(dir, vars); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "daemon.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(data)
+	for _, want := range []string{
+		"download_sing_box   = true",
+		"download_cn_list    = false",
+		"auto_start          = true",
+		`firmware            = "koolshare"`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("rendered daemon.toml missing %q\n--- got ---\n%s", want, got)
+		}
+	}
+}
+
 func TestSeedPreservesExisting(t *testing.T) {
 	dir := t.TempDir()
 	if err := EnsureLayout(dir); err != nil {
@@ -41,7 +80,7 @@ func TestSeedPreservesExisting(t *testing.T) {
 	if err := os.WriteFile(daemonToml, []byte("# user edit\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := SeedDefaults(dir); err != nil {
+	if err := SeedDefaults(dir, TemplateVars{Firmware: "koolshare"}); err != nil {
 		t.Fatal(err)
 	}
 	data, _ := os.ReadFile(daemonToml)

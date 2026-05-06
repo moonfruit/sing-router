@@ -1,5 +1,6 @@
 # /opt/home/sing-router/daemon.toml
-# Module A 范围内的全部设置；后续模块会以独立 section 增量加入。
+# 该文件在首次 `sing-router install` 时由模板生成；之后由用户维护，
+# 后续运行 `install` 不会覆盖此文件（包括其中的 firmware 与 download 选项）。
 
 [runtime]
 # rundir = "/opt/home/sing-router"   # 默认 = -D 参数 / 启动 cwd
@@ -55,8 +56,9 @@ http_retries             = 3
 # proxy_ports   = "22,80,443,8080,8443"
 
 [install]
-download_sing_box   = true
-download_cn_list    = true
-download_zashboard  = false
-auto_start          = false
-# firmware          = "koolshare"   # 由 `sing-router install` 决议后写入；可手动覆盖
+# 本节在首次 install 时由命令行参数（或探测结果）渲染；之后由用户维护。
+download_sing_box   = {{ .DownloadSingBox }}
+download_cn_list    = {{ .DownloadCNList }}
+download_zashboard  = {{ .DownloadZashboard }}
+auto_start          = {{ .AutoStart }}
+firmware            = "{{ .Firmware }}"

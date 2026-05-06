@@ -39,8 +39,7 @@ func newInstallCmd() *cobra.Command {
 			if rundir == "" {
 				rundir = "/opt/home/sing-router"
 			}
-			tomlPath := filepath.Join(rundir, "daemon.toml")
-			cfg, _ := config.LoadDaemonConfig(tomlPath)
+			cfg, _ := config.LoadDaemonConfig(filepath.Join(rundir, "daemon.toml"))
 			if !cmd.Flags().Changed("download-sing-box") {
 				downloadSingBox = cfg.Install.DownloadSingBox
 			}
@@ -66,10 +65,34 @@ func newInstallCmd() *cobra.Command {
 				return fn()
 			}
 
+			// 1. Resolve firmware up-front so it can be baked into the rendered daemon.toml.
+			kind, err := resolveFirmware(firmwareFlag, cfg.Install.Firmware)
+			if err != nil {
+				fmt.Fprintln(cmd.ErrOrStderr(), err.Error())
+				os.Exit(2)
+			}
+
+			// 2. Merlin warning gate (before any FS writes — abort cleanly if user declines).
+			if kind == firmware.KindMerlin && !yesFlag {
+				if !confirmMerlin(cmd.OutOrStdout(), confirmStdin) {
+					return fmt.Errorf("aborted by user")
+				}
+			}
+
+			// 3. Layout + seed (renders daemon.toml from template on first install only).
 			if err := run("ensure rundir layout", func() error { return install.EnsureLayout(rundir) }); err != nil {
 				return err
 			}
-			if err := run("seed default config.d/* and daemon.toml", func() error { return install.SeedDefaults(rundir) }); err != nil {
+			vars := install.TemplateVars{
+				DownloadSingBox:   downloadSingBox,
+				DownloadCNList:    downloadCNList,
+				DownloadZashboard: cfg.Install.DownloadZashboard,
+				AutoStart:         autoStart,
+				Firmware:          string(kind),
+			}
+			if err := run("seed default config.d/* and render daemon.toml", func() error {
+				return install.SeedDefaults(rundir, vars)
+			}); err != nil {
 				return err
 			}
 			if err := run("write /opt/etc/init.d/S99sing-router", func() error {
@@ -78,21 +101,7 @@ func newInstallCmd() *cobra.Command {
 				return err
 			}
 
-			// 6. Resolve firmware.
-			kind, err := resolveFirmware(firmwareFlag, cfg.Install.Firmware)
-			if err != nil {
-				fmt.Fprintln(cmd.ErrOrStderr(), err.Error())
-				os.Exit(2)
-			}
-
-			// 7. Merlin warning gate.
-			if kind == firmware.KindMerlin && !yesFlag {
-				if !confirmMerlin(cmd.OutOrStdout(), confirmStdin) {
-					return fmt.Errorf("aborted by user")
-				}
-			}
-
-			// 8. Install firmware hooks.
+			// 4. Install firmware hooks.
 			if !skipFirmwareHooks {
 				target, err := firmware.ByName(string(kind))
 				if err != nil {
@@ -107,14 +116,7 @@ func newInstallCmd() *cobra.Command {
 				fmt.Fprintln(cmd.OutOrStdout(), "→ skipped firmware hook installation (--skip-firmware-hooks)")
 			}
 
-			// 9. Persist firmware decision.
-			if err := run("record firmware="+string(kind)+" in daemon.toml", func() error {
-				return config.WriteInstallFirmware(tomlPath, string(kind))
-			}); err != nil {
-				return err
-			}
-
-			// 10. Optional downloads.
+			// 5. Optional downloads.
 			if downloadSingBox {
 				version := singBoxVersion
 				if version == "latest" {
@@ -145,7 +147,7 @@ func newInstallCmd() *cobra.Command {
 				}
 			}
 
-			// 11. Auto-start.
+			// 6. Auto-start.
 			if autoStart {
 				if err := run("start init.d service", func() error {
 					return runShell("/opt/etc/init.d/S99sing-router", "start")
@@ -163,9 +165,9 @@ func newInstallCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVarP(&rundir, "rundir", "D", "", "Runtime root directory (default /opt/home/sing-router)")
-	cmd.Flags().BoolVar(&downloadSingBox, "download-sing-box", true, "Download sing-box into bin/")
-	cmd.Flags().BoolVar(&downloadCNList, "download-cn-list", true, "Download cn.txt into var/")
-	cmd.Flags().BoolVar(&autoStart, "start", false, "Start init.d service after install")
+	cmd.Flags().BoolVar(&downloadSingBox, "download-sing-box", false, "Download sing-box into bin/ (off on first install; pass --download-sing-box=true to opt in)")
+	cmd.Flags().BoolVar(&downloadCNList, "download-cn-list", false, "Download cn.txt into var/ (off on first install; pass --download-cn-list=true to opt in)")
+	cmd.Flags().BoolVar(&autoStart, "start", false, "Start init.d service after install (off on first install; pass --start=true to opt in)")
 	cmd.Flags().StringVar(&mirrorPrefix, "mirror-prefix", "", "Download mirror prefix (e.g. https://ghproxy.com/)")
 	cmd.Flags().StringVar(&singBoxVersion, "sing-box-version", "", "sing-box version to download (default latest)")
 	cmd.Flags().StringVar(&firmwareFlag, "firmware", "auto", "Firmware target: auto | koolshare | merlin")
