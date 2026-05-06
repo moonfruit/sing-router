@@ -15,6 +15,7 @@ func TestDefaultConfigsPresent(t *testing.T) {
 		"config.d.default/certificate.json",
 		"config.d.default/http.json",
 		"config.d.default/outbounds.json",
+		"config.d.default/zoo.json",
 		"daemon.toml.tmpl",
 		"initd/S99sing-router",
 		"firmware/koolshare/N99sing-router.sh",

@@ -1,0 +1,11 @@
+{
+  "outbounds": [
+    {
+      "type": "selector",
+      "tag": "🔰 默认出口",
+      "outbounds": [
+        "DIRECT"
+      ]
+    }
+  ]
+}

@@ -32,6 +32,7 @@ func TestSeedWritesDefaultsWhenMissing(t *testing.T) {
 		"config.d/certificate.json",
 		"config.d/http.json",
 		"config.d/outbounds.json",
+		"config.d/zoo.json",
 	} {
 		if _, err := os.Stat(filepath.Join(dir, p)); err != nil {
 			t.Errorf("missing seed file %s: %v", p, err)

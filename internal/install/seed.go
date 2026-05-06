@@ -35,6 +35,7 @@ func SeedDefaults(rundir string, vars TemplateVars) error {
 		"config.d.default/certificate.json": "config.d/certificate.json",
 		"config.d.default/http.json":        "config.d/http.json",
 		"config.d.default/outbounds.json":   "config.d/outbounds.json",
+		"config.d.default/zoo.json":         "config.d/zoo.json",
 	}
 	for src, dst := range plainFiles {
 		if err := writeIfMissing(rundir, dst, func() ([]byte, error) {

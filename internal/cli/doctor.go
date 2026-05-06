@@ -55,10 +55,9 @@ func runDoctorChecks(rundir string) []doctorCheck {
 		out = append(out, checkDirExists(filepath.Join(rundir, sub), "rundir/"+sub))
 	}
 	out = append(out, checkExistsExec(filepath.Join(rundir, "bin", "sing-box")))
-	for _, c := range []string{"clash.json", "dns.json", "inbounds.json", "log.json"} {
+	for _, c := range []string{"clash.json", "dns.json", "inbounds.json", "log.json", "zoo.json"} {
 		out = append(out, checkExistsAs(filepath.Join(rundir, "config.d", c), "config.d/"+c, "fail"))
 	}
-	out = append(out, checkExistsAs(filepath.Join(rundir, "config.d", "zoo.json"), "config.d/zoo.json", "warn"))
 	out = append(out, checkExistsAs(filepath.Join(rundir, "var", "cn.txt"), "var/cn.txt", "warn"))
 	out = append(out, checkExistsExec("/opt/etc/init.d/S99sing-router"))
 
