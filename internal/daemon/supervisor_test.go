@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/moonfruit/sing2seq/clef"
 	log "github.com/moonfruit/sing-router/internal/log"
 )
 
@@ -40,19 +41,19 @@ func freePort(t *testing.T) int {
 	return p
 }
 
-func newTestEmitter(t *testing.T) *log.Emitter {
+func newTestEmitter(t *testing.T) *clef.Emitter {
 	dir := t.TempDir()
 	w, err := log.NewWriter(log.WriterConfig{Path: filepath.Join(dir, "test.log")})
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = w.Close() })
-	return log.NewEmitter(log.EmitterConfig{
+	stack := log.NewEmitterStack(log.StackConfig{
 		Source:   "daemon",
 		MinLevel: log.LevelInfo,
 		Writer:   w,
-		Bus:      log.NewBus(8),
 	})
+	t.Cleanup(func() { _ = stack.Close() })
+	return stack.Emitter
 }
 
 func TestSupervisorBootHappyPath(t *testing.T) {

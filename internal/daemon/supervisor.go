@@ -11,12 +11,13 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/moonfruit/sing2seq/clef"
 	log "github.com/moonfruit/sing-router/internal/log"
 )
 
 // SupervisorConfig 控制 supervisor 行为。
 type SupervisorConfig struct {
-	Emitter       *log.Emitter
+	Emitter       *clef.Emitter
 	SingBoxBinary string
 	SingBoxArgs   []string
 	SingBoxDir    string // 子进程 cwd
