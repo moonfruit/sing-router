@@ -31,6 +31,7 @@ func newInstallCmd() *cobra.Command {
 		yesFlag           bool
 		skipFirmwareHooks bool
 		dryRun            bool
+		debugOnly         bool
 	)
 	cmd := &cobra.Command{
 		Use:   "install",
@@ -95,14 +96,23 @@ func newInstallCmd() *cobra.Command {
 			}); err != nil {
 				return err
 			}
-			if err := run("write /opt/etc/init.d/S99sing-router", func() error {
-				return install.WriteInitd("/opt/etc/init.d/S99sing-router", rundir)
-			}); err != nil {
-				return err
+			if !debugOnly {
+				if err := run("write /opt/etc/init.d/S99sing-router", func() error {
+					return install.WriteInitd("/opt/etc/init.d/S99sing-router", rundir)
+				}); err != nil {
+					return err
+				}
+			} else {
+				fmt.Fprintln(cmd.OutOrStdout(), "→ skipped /opt/etc/init.d/S99sing-router (--debug-only)")
 			}
 
 			// 4. Install firmware hooks.
-			if !skipFirmwareHooks {
+			switch {
+			case skipFirmwareHooks:
+				fmt.Fprintln(cmd.OutOrStdout(), "→ skipped firmware hook installation (--skip-firmware-hooks)")
+			case debugOnly:
+				fmt.Fprintln(cmd.OutOrStdout(), "→ skipped firmware hook installation (--debug-only)")
+			default:
 				target, err := firmware.ByName(string(kind))
 				if err != nil {
 					return err
@@ -112,8 +122,6 @@ func newInstallCmd() *cobra.Command {
 				}); err != nil {
 					return err
 				}
-			} else {
-				fmt.Fprintln(cmd.OutOrStdout(), "→ skipped firmware hook installation (--skip-firmware-hooks)")
 			}
 
 			// 5. Optional downloads.
@@ -148,7 +156,10 @@ func newInstallCmd() *cobra.Command {
 			}
 
 			// 6. Auto-start.
-			if autoStart {
+			switch {
+			case autoStart && debugOnly:
+				fmt.Fprintln(cmd.OutOrStdout(), "→ ignoring --start because of --debug-only")
+			case autoStart:
 				if err := run("start init.d service", func() error {
 					return runShell("/opt/etc/init.d/S99sing-router", "start")
 				}); err != nil {
@@ -157,10 +168,16 @@ func newInstallCmd() *cobra.Command {
 			}
 
 			fmt.Fprintln(cmd.OutOrStdout())
-			fmt.Fprintln(cmd.OutOrStdout(), "Next steps:")
-			fmt.Fprintln(cmd.OutOrStdout(), "  1. Edit", filepath.Join(rundir, "daemon.toml"), "to taste")
-			fmt.Fprintln(cmd.OutOrStdout(), "  2. Place your zoo.json at", filepath.Join(rundir, "var", "zoo.raw.json"))
-			fmt.Fprintln(cmd.OutOrStdout(), "  3. Run `S99sing-router start` (if --start not used) and `sing-router status`")
+			if debugOnly {
+				fmt.Fprintln(cmd.OutOrStdout(), "Debug seed complete. To run the daemon in the foreground:")
+				fmt.Fprintln(cmd.OutOrStdout(), "  sing-router daemon -D", rundir)
+				fmt.Fprintln(cmd.OutOrStdout(), "Logs:", filepath.Join(rundir, "log", "sing-router.log"))
+			} else {
+				fmt.Fprintln(cmd.OutOrStdout(), "Next steps:")
+				fmt.Fprintln(cmd.OutOrStdout(), "  1. Edit", filepath.Join(rundir, "daemon.toml"), "to taste")
+				fmt.Fprintln(cmd.OutOrStdout(), "  2. Place your zoo.json at", filepath.Join(rundir, "var", "zoo.raw.json"))
+				fmt.Fprintln(cmd.OutOrStdout(), "  3. Run `S99sing-router start` (if --start not used) and `sing-router status`")
+			}
 			return nil
 		},
 	}
@@ -174,6 +191,9 @@ func newInstallCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&yesFlag, "yes", false, "Skip Merlin warning interactive confirmation")
 	cmd.Flags().BoolVar(&skipFirmwareHooks, "skip-firmware-hooks", false, "Skip firmware-specific hook installation")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Print actions without executing")
+	cmd.Flags().BoolVar(&debugOnly, "debug-only", false,
+		"Seed rundir without writing /opt/etc/init.d or firmware hooks "+
+			"(for manual 'sing-router daemon -D' runs; implies --start=false)")
 	return cmd
 }
 
