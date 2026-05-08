@@ -5,13 +5,18 @@ VERSION     ?= 0.1.0+$(shell git rev-parse --short HEAD 2>/dev/null || echo dev)
 LDFLAGS     := -s -w -X $(PKG).Version=$(VERSION)
 CN_LIST_URL ?= https://cdn.jsdelivr.net/gh/juewuy/ShellCrash@update/bin/geodata/china_ip_list.txt
 
-.PHONY: build build-arm64 test cover fakebox update-cn
+UPLOAD_DEST ?= /opt/bin/sing-router
+
+.PHONY: build build-arm64 upload test cover fakebox update-cn
 
 build:
 	$(GO) build -trimpath -ldflags '$(LDFLAGS)' -o $(BIN) ./cmd/sing-router
 
 build-arm64:
 	GOOS=linux GOARCH=arm64 $(GO) build -trimpath -ldflags '$(LDFLAGS)' -o $(BIN)-linux-arm64 ./cmd/sing-router
+
+upload: build-arm64
+	./upload.sh -d $(UPLOAD_DEST) $(BIN)-linux-arm64
 
 test:
 	$(GO) test ./...
