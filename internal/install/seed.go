@@ -44,6 +44,11 @@ func SeedDefaults(rundir string, vars TemplateVars) error {
 			return err
 		}
 	}
+	if err := writeIfMissing(rundir, "var/cn.txt", func() ([]byte, error) {
+		return assets.ReadFile("cn.txt")
+	}); err != nil {
+		return err
+	}
 	return writeIfMissing(rundir, "daemon.toml", func() ([]byte, error) {
 		return renderDaemonToml(vars)
 	})

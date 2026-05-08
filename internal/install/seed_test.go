@@ -33,10 +33,19 @@ func TestSeedWritesDefaultsWhenMissing(t *testing.T) {
 		"config.d/http.json",
 		"config.d/outbounds.json",
 		"config.d/zoo.json",
+		"var/cn.txt",
 	} {
 		if _, err := os.Stat(filepath.Join(dir, p)); err != nil {
 			t.Errorf("missing seed file %s: %v", p, err)
 		}
+	}
+	cnData, err := os.ReadFile(filepath.Join(dir, "var/cn.txt"))
+	if err != nil {
+		t.Fatalf("read seeded cn.txt: %v", err)
+	}
+	firstLine := strings.SplitN(string(cnData), "\n", 2)[0]
+	if !strings.Contains(firstLine, "/") {
+		t.Errorf("seeded cn.txt first line is not a CIDR: %q", firstLine)
 	}
 }
 

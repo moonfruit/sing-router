@@ -9,7 +9,7 @@ import (
 )
 
 // DefaultCNListURL 是 daemon.toml 缺省时的 cn.txt 拉取地址。
-const DefaultCNListURL = "https://raw.githubusercontent.com/17mon/china_ip_list/master/china_ip_list.txt"
+const DefaultCNListURL = "https://cdn.jsdelivr.net/gh/juewuy/ShellCrash@update/bin/geodata/china_ip_list.txt"
 
 // DefaultSingBoxURLTemplate 是 sing-box 二进制下载模板。
 const DefaultSingBoxURLTemplate = "https://github.com/SagerNet/sing-box/releases/download/v{version}/sing-box-{version}-linux-arm64.tar.gz"
