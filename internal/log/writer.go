@@ -10,16 +10,18 @@ import (
 	"path/filepath"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/moonfruit/sing2seq/clef"
 )
 
 // WriterConfig 配置 Writer 的轮转行为。
 type WriterConfig struct {
-	Path       string // active 文件绝对路径
-	MaxSize    int64  // 字节；> 0 触发大小轮转，<= 0 表示不轮转
-	MaxBackups int    // 保留的旧文件数量；超出按 .N 编号删除最旧
-	Gzip       bool   // 是否在轮转后异步把 .1 压成 .1.gz
+	Path          string        // active 文件绝对路径
+	MaxSize       int64         // 字节；> 0 触发大小轮转，<= 0 表示不轮转
+	MaxBackups    int           // 保留的旧文件数量；超出按 .N 编号删除最旧
+	Gzip          bool          // 是否在轮转后异步把 .1 压成 .1.gz
+	FlushInterval time.Duration // > 0 时后台 ticker 周期性把 bufio 推到 page cache；<=0 禁用
 }
 
 // Writer 写 CLEF JSON Lines 到 active 文件，按大小阈值轮转，可选 gzip。
@@ -33,6 +35,9 @@ type Writer struct {
 	size int64
 
 	gzipWg sync.WaitGroup
+
+	flushDone chan struct{}
+	flushWg   sync.WaitGroup
 }
 
 // NewWriter 打开（或创建）active 文件。父目录必须已存在。
@@ -44,7 +49,28 @@ func NewWriter(cfg WriterConfig) (*Writer, error) {
 	if err := w.openActive(); err != nil {
 		return nil, err
 	}
+	if cfg.FlushInterval > 0 {
+		w.flushDone = make(chan struct{})
+		w.flushWg.Add(1)
+		go w.flushLoop(cfg.FlushInterval)
+	}
 	return w, nil
+}
+
+// flushLoop 周期性把 bufio 推到 page cache，让外部 tail 能及时看到日志。
+// 不调用 fsync —— 持久化交给 Sync / Close / 轮转。
+func (w *Writer) flushLoop(interval time.Duration) {
+	defer w.flushWg.Done()
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-w.flushDone:
+			return
+		case <-t.C:
+			_ = w.Flush()
+		}
+	}
 }
 
 func (w *Writer) openActive() error {
@@ -84,14 +110,31 @@ func (w *Writer) Write(e *clef.Event) error {
 	return err
 }
 
-// Sync 刷新缓冲到磁盘。
+// Flush 把 bufio 缓冲推到 fd（即 page cache），不调用 fsync。
+// 用于让 tail 等读取者可见；ms 级别开销，可在 hot path 中频繁调用。
+func (w *Writer) Flush() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.bw == nil {
+		return nil
+	}
+	return w.bw.Flush()
+}
+
+// Sync 刷新缓冲并 fsync 到磁盘（持久化）。
+// 比 Flush 重得多；用于 Close、轮转、SIGUSR1 等需要落盘的场合。
 func (w *Writer) Sync() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if err := w.bw.Flush(); err != nil {
-		return err
+	if w.bw != nil {
+		if err := w.bw.Flush(); err != nil {
+			return err
+		}
 	}
-	return w.f.Sync()
+	if w.f != nil {
+		return w.f.Sync()
+	}
+	return nil
 }
 
 // Reopen 关闭当前 active 文件并重新打开同一路径；用于 logrotate copytruncate
@@ -108,8 +151,13 @@ func (w *Writer) Reopen() error {
 	return w.openActive()
 }
 
-// Close 刷新并关闭 active 文件，等待所有异步 gzip 完成。
+// Close 刷新并关闭 active 文件，等待 flush 循环和异步 gzip 完成。
 func (w *Writer) Close() error {
+	if w.flushDone != nil {
+		close(w.flushDone)
+		w.flushWg.Wait()
+		w.flushDone = nil
+	}
 	w.mu.Lock()
 	var firstErr error
 	if w.bw != nil {

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/moonfruit/sing2seq/clef"
 )
@@ -150,6 +151,37 @@ func TestWriterGzipBackupReadable(t *testing.T) {
 	if !strings.Contains(string(body), "@l") {
 		t.Fatal("backup content not JSON Lines")
 	}
+}
+
+func TestWriterFlushIntervalMakesWritesVisible(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "sing-router.log")
+	w, err := NewWriter(WriterConfig{
+		Path:          path,
+		FlushInterval: 50 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	t.Cleanup(func() { _ = w.Close() })
+
+	e := clef.NewEvent()
+	e.Set("@l", "Information")
+	e.Set("@mt", "ticker-visible")
+	if err := w.Write(e); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	// 不调用 Sync/Flush；等 ticker 自己刷一次。
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		data, _ := os.ReadFile(path)
+		if strings.Contains(string(data), "ticker-visible") {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("event not visible on disk within 2s; ticker did not flush")
 }
 
 func TestWriterReopenOnSIGUSR1Equivalent(t *testing.T) {

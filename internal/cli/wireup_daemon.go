@@ -39,10 +39,11 @@ func realRunDaemon(ctx context.Context, rundir string) error {
 		return fmt.Errorf("mkdir log dir: %w", err)
 	}
 	writer, err := log.NewWriter(log.WriterConfig{
-		Path:       logPath,
-		MaxSize:    int64(cfg.Log.MaxSizeMB) * 1024 * 1024,
-		MaxBackups: cfg.Log.MaxBackups,
-		Gzip:       true,
+		Path:          logPath,
+		MaxSize:       int64(cfg.Log.MaxSizeMB) * 1024 * 1024,
+		MaxBackups:    cfg.Log.MaxBackups,
+		Gzip:          true,
+		FlushInterval: 500 * time.Millisecond,
 	})
 	if err != nil {
 		return err
