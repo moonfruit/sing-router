@@ -13,8 +13,11 @@ import (
 type APIDeps struct {
 	Supervisor *Supervisor
 	Emitter    *clef.Emitter
+	Bus        *clef.Bus // 用于 /logs?follow=true 的 SSE 订阅；nil 时 follow 不可用
 	Version    string
 	Rundir     string
+	LogFile    string          // active sing-router.log 绝对路径；用于 /logs 历史 tail
+	Ctx        context.Context // daemon 主 ctx；SSE handler 用它感知 daemon 关停
 
 	// 给 reapply-rules / check 的 hook
 	ReapplyRules func(context.Context) error
@@ -97,6 +100,7 @@ func NewMux(deps APIDeps) *http.ServeMux {
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 	})
+	mux.HandleFunc("/api/v1/logs", handleLogs(deps))
 	mux.HandleFunc("/api/v1/script/", func(w http.ResponseWriter, r *http.Request) {
 		name := r.URL.Path[len("/api/v1/script/"):]
 		if deps.ScriptByName == nil {

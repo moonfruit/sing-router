@@ -18,6 +18,8 @@ type Options struct {
 	Listen       string
 	Version      string
 	Emitter      *clef.Emitter
+	Bus          *clef.Bus // 给 /api/v1/logs?follow=true 的 SSE 订阅
+	LogFile      string    // sing-router.log 绝对路径；给 /api/v1/logs 历史 tail
 	Supervisor   *Supervisor
 	ReapplyRules func(context.Context) error
 	CheckConfig  func(context.Context) error
@@ -38,8 +40,11 @@ func Run(ctx context.Context, opts Options) error {
 	deps := APIDeps{
 		Supervisor:   opts.Supervisor,
 		Emitter:      opts.Emitter,
+		Bus:          opts.Bus,
 		Version:      opts.Version,
 		Rundir:       opts.Rundir,
+		LogFile:      opts.LogFile,
+		Ctx:          ctx,
 		ReapplyRules: opts.ReapplyRules,
 		CheckConfig:  opts.CheckConfig,
 		StatusExtra:  opts.StatusExtra,

@@ -108,6 +108,8 @@ func realRunDaemon(ctx context.Context, rundir string) error {
 		Listen:     cfg.HTTP.Listen,
 		Version:    version.String(),
 		Emitter:    em,
+		Bus:        stack.Bus,
+		LogFile:    logPath,
 		Supervisor: sup,
 		ReapplyRules: func(ctx context.Context) error {
 			if err := runner.Run(ctx, string(teardown), nil); err != nil {
