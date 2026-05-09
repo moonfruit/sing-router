@@ -2,3 +2,9 @@
 !.git*
 
 /example
+/sing-router
+/sing-router-*
+/dist/
+/coverage.out
+/coverage.html
+/testdata/fake-sing-box/fake-sing-box

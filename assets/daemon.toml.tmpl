@@ -1,0 +1,64 @@
+# /opt/home/sing-router/daemon.toml
+# 该文件在首次 `sing-router install` 时由模板生成；之后由用户维护，
+# 后续运行 `install` 不会覆盖此文件（包括其中的 firmware 与 download 选项）。
+
+[runtime]
+# rundir = "/opt/home/sing-router"   # 默认 = -D 参数 / 启动 cwd
+sing_box_binary = "bin/sing-box"
+config_dir      = "config.d"
+ui_dir          = "ui"
+
+[http]
+listen          = "127.0.0.1:9998"
+# token         = ""                 # A 阶段不启用，D 阶段加
+
+[log]
+level           = "info"
+file            = "log/sing-router.log"
+rotate          = "internal"
+max_size_mb     = 10
+max_backups     = 5
+disable_color   = false
+include_stack   = false
+
+[supervisor]
+# ready_check_dial_inbounds       = true
+# ready_check_clash_api           = true
+# ready_check_timeout_ms          = 5000
+# ready_check_interval_ms         = 200
+# crash_pre_ready_action          = "fatal"
+# crash_post_ready_backoff_ms     = [1000, 2000, 4000, 8000, 16000, 32000, 64000, 128000, 256000, 512000, 600000]
+# iptables_keep_when_backoff_lt_ms = 10000
+# stop_grace_seconds              = 5
+
+[zoo]
+extract_keys              = ["outbounds", "route.rules", "route.rule_set", "route.final"]
+rule_set_dedup_strategy   = "builtin_wins"
+outbound_collision_action = "reject"
+
+[download]
+mirror_prefix            = ""
+sing_box_url_template    = "https://github.com/SagerNet/sing-box/releases/download/v{version}/sing-box-{version}-linux-arm64.tar.gz"
+sing_box_default_version = "latest"
+cn_list_url              = "https://cdn.jsdelivr.net/gh/juewuy/ShellCrash@update/bin/geodata/china_ip_list.txt"
+http_timeout_seconds     = 60
+http_retries             = 3
+
+[router]
+# dns_port      = 1053
+# redirect_port = 7892
+# route_mark    = "0x7892"
+# bypass_mark   = "0x7890"
+# tun           = "utun"
+# fakeip        = "28.0.0.0/8"   # 必须与 dns.json inet4_range 一致
+# lan           = "192.168.50.0/24"
+# route_table   = 111
+# proxy_ports   = "22,80,443,8080,8443"
+
+[install]
+# 本节在首次 install 时由命令行参数（或探测结果）渲染；之后由用户维护。
+download_sing_box   = {{ .DownloadSingBox }}
+download_cn_list    = {{ .DownloadCNList }}
+download_zashboard  = {{ .DownloadZashboard }}
+auto_start          = {{ .AutoStart }}
+firmware            = "{{ .Firmware }}"
