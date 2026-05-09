@@ -45,7 +45,7 @@ func SeedDefaults(rundir string, vars TemplateVars) error {
 		}
 	}
 	if err := writeIfMissing(rundir, "var/cn.txt", func() ([]byte, error) {
-		return assets.ReadFile("cn.txt")
+		return assets.ReadFile("var/cn.txt")
 	}); err != nil {
 		return err
 	}

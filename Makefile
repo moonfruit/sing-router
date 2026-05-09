@@ -29,15 +29,15 @@ fakebox:
 	testdata/fake-sing-box/build.sh
 
 update-cn:
-	@rm -f assets/cn.txt.new
+	@rm -f assets/var/cn.txt.new
 	@curl -fsSL --retry 3 \
-	    --etag-compare assets/cn.txt.etag \
-	    --etag-save    assets/cn.txt.etag \
-	    -o assets/cn.txt.new "$(CN_LIST_URL)"
-	@if [ -s assets/cn.txt.new ]; then \
-	    mv assets/cn.txt.new assets/cn.txt; \
-	    echo "assets/cn.txt updated ($$(wc -l < assets/cn.txt) lines)"; \
+	    --etag-compare assets/var/cn.txt.etag \
+	    --etag-save    assets/var/cn.txt.etag \
+	    -o assets/var/cn.txt.new "$(CN_LIST_URL)"
+	@if [ -s assets/var/cn.txt.new ]; then \
+	    mv assets/var/cn.txt.new assets/var/cn.txt; \
+	    echo "assets/var/cn.txt updated ($$(wc -l < assets/var/cn.txt) lines)"; \
 	else \
-	    rm -f assets/cn.txt.new; \
-	    echo "assets/cn.txt already up to date (HTTP 304)"; \
+	    rm -f assets/var/cn.txt.new; \
+	    echo "assets/var/cn.txt already up to date (HTTP 304)"; \
 	fi
