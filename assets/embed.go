@@ -7,7 +7,7 @@ import (
 	"io/fs"
 )
 
-//go:embed config.d.default/*.json daemon.toml.tmpl initd/* shell/*.sh firmware/koolshare/* firmware/merlin/* var/cn.txt var/cn.txt.etag
+//go:embed config.d.default daemon.toml.tmpl firmware initd shell var
 var fsys embed.FS
 
 // FS 返回根 fs.FS，可被 install 模块用 fs.Sub 取子树。
