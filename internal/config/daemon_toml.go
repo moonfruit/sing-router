@@ -12,7 +12,12 @@ import (
 const DefaultCNListURL = "https://cdn.jsdelivr.net/gh/juewuy/ShellCrash@update/bin/geodata/china_ip_list.txt"
 
 // DefaultSingBoxURLTemplate 是 sing-box 二进制下载模板。
+//
+// Deprecated: 阶段 B 起 sing-box 改从 gitee 下载，本常量将在 M4 清理中移除。
 const DefaultSingBoxURLTemplate = "https://github.com/SagerNet/sing-box/releases/download/v{version}/sing-box-{version}-linux-arm64.tar.gz"
+
+// envGiteeToken 是允许覆盖 [gitee].token 的环境变量名。
+const envGiteeToken = "SING_ROUTER_GITEE_TOKEN"
 
 // DaemonConfig 反映 daemon.toml 的全部字段；未来 B/C/E/F 模块各自加自己的 section。
 type DaemonConfig struct {
@@ -22,6 +27,8 @@ type DaemonConfig struct {
 	Supervisor SupervisorConfig `toml:"supervisor"`
 	Zoo        ZooConfig        `toml:"zoo"`
 	Download   DownloadConfig   `toml:"download"`
+	Gitee      GiteeConfig      `toml:"gitee"`
+	Sync       SyncConfig       `toml:"sync"`
 	Router     RouterConfig     `toml:"router"`
 	Install    InstallConfig    `toml:"install"`
 }
@@ -74,6 +81,38 @@ type DownloadConfig struct {
 	HTTPRetries           int    `toml:"http_retries"`
 }
 
+// GiteeConfig 描述访问 gitee 私有仓库所需的全局凭证与仓库定位。
+// 每个资源类型（sing-box / zoo）在子节中各自指定 ref；rule_set 反向代理的
+// ref 由 dns.json 中的 URL path 直接携带，不在此预声明。
+type GiteeConfig struct {
+	Token   string             `toml:"token"`
+	Owner   string             `toml:"owner"`
+	Repo    string             `toml:"repo"`
+	SingBox GiteeSingBoxConfig `toml:"sing_box"`
+	Zoo     GiteeZooConfig     `toml:"zoo"`
+}
+
+// GiteeSingBoxConfig 描述 sing-box 二进制在 gitee 仓库中的位置。
+type GiteeSingBoxConfig struct {
+	Ref                 string `toml:"ref"`                   // e.g. "binary"
+	VersionPath         string `toml:"version_path"`          // e.g. "version.txt"
+	TarballPathTemplate string `toml:"tarball_path_template"` // e.g. "sing-box-{version}-linux-arm64-musl.tar.gz"
+}
+
+// GiteeZooConfig 描述 zoo（config.json）在 gitee 仓库中的位置。
+type GiteeZooConfig struct {
+	Ref  string `toml:"ref"`  // e.g. "main"
+	Path string `toml:"path"` // e.g. "config.json"
+}
+
+// SyncConfig 控制 daemon 后台周期同步行为。CLI 手动 update 命令不受此控制。
+//
+// 用 *int 区分"未提供"（应用默认）与"显式 0"（禁用）。
+type SyncConfig struct {
+	IntervalSeconds *int `toml:"interval_seconds"`   // 0 = 禁用 daemon 后台同步
+	OnStartDelaySec *int `toml:"on_start_delay_sec"` // daemon 启动后多久首次同步
+}
+
 type RouterConfig struct {
 	DnsPort      *int    `toml:"dns_port"`
 	RedirectPort *int    `toml:"redirect_port"`
@@ -102,6 +141,8 @@ func LoadDaemonConfig(path string) (*DaemonConfig, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
+			applyDefaults(cfg)
+			applyEnvOverrides(cfg)
 			return cfg, nil
 		}
 		return nil, err
@@ -110,7 +151,16 @@ func LoadDaemonConfig(path string) (*DaemonConfig, error) {
 		return nil, err
 	}
 	applyDefaults(cfg)
+	applyEnvOverrides(cfg)
 	return cfg, nil
+}
+
+// applyEnvOverrides 让运维场景 / CI 在不写 daemon.toml 的情况下注入敏感字段。
+// 当前仅 SING_ROUTER_GITEE_TOKEN：非空时覆盖 [gitee].token。
+func applyEnvOverrides(cfg *DaemonConfig) {
+	if v := os.Getenv(envGiteeToken); v != "" {
+		cfg.Gitee.Token = v
+	}
 }
 
 func defaultConfig() *DaemonConfig {
@@ -140,6 +190,20 @@ func defaultConfig() *DaemonConfig {
 			HTTPTimeoutSeconds:    60,
 			HTTPRetries:           3,
 		},
+		Gitee: GiteeConfig{
+			Owner: "moonfruit",
+			Repo:  "private",
+			SingBox: GiteeSingBoxConfig{
+				Ref:                 "binary",
+				VersionPath:         "version.txt",
+				TarballPathTemplate: "sing-box-{version}-linux-arm64-musl.tar.gz",
+			},
+			Zoo: GiteeZooConfig{
+				Ref:  "main",
+				Path: "config.json",
+			},
+		},
+		Sync: SyncConfig{}, // applyDefaults 填补
 		Install: InstallConfig{
 			DownloadSingBox:   false,
 			DownloadCNList:    false,
@@ -203,4 +267,49 @@ func applyDefaults(cfg *DaemonConfig) {
 	if cfg.Download.HTTPRetries == 0 {
 		cfg.Download.HTTPRetries = 3
 	}
+	if cfg.Gitee.Owner == "" {
+		cfg.Gitee.Owner = "moonfruit"
+	}
+	if cfg.Gitee.Repo == "" {
+		cfg.Gitee.Repo = "private"
+	}
+	if cfg.Gitee.SingBox.Ref == "" {
+		cfg.Gitee.SingBox.Ref = "binary"
+	}
+	if cfg.Gitee.SingBox.VersionPath == "" {
+		cfg.Gitee.SingBox.VersionPath = "version.txt"
+	}
+	if cfg.Gitee.SingBox.TarballPathTemplate == "" {
+		cfg.Gitee.SingBox.TarballPathTemplate = "sing-box-{version}-linux-arm64-musl.tar.gz"
+	}
+	if cfg.Gitee.Zoo.Ref == "" {
+		cfg.Gitee.Zoo.Ref = "main"
+	}
+	if cfg.Gitee.Zoo.Path == "" {
+		cfg.Gitee.Zoo.Path = "config.json"
+	}
+	if cfg.Sync.IntervalSeconds == nil {
+		v := 21600
+		cfg.Sync.IntervalSeconds = &v
+	}
+	if cfg.Sync.OnStartDelaySec == nil {
+		v := 300
+		cfg.Sync.OnStartDelaySec = &v
+	}
+}
+
+// SyncIntervalSeconds 是 SyncConfig.IntervalSeconds 的安全访问器。未设置时回退默认值。
+func (c SyncConfig) SyncIntervalSeconds() int {
+	if c.IntervalSeconds == nil {
+		return 21600
+	}
+	return *c.IntervalSeconds
+}
+
+// SyncOnStartDelaySec 是 SyncConfig.OnStartDelaySec 的安全访问器。
+func (c SyncConfig) SyncOnStartDelaySec() int {
+	if c.OnStartDelaySec == nil {
+		return 300
+	}
+	return *c.OnStartDelaySec
 }
