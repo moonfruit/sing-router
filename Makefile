@@ -5,7 +5,7 @@ VERSION     ?= 0.1.0+$(shell git rev-parse --short HEAD 2>/dev/null || echo dev)
 LDFLAGS     := -s -w -X $(PKG).Version=$(VERSION)
 CN_LIST_URL ?= https://cdn.jsdelivr.net/gh/juewuy/ShellCrash@update/bin/geodata/china_ip_list.txt
 
-UPLOAD_DEST ?= /opt/bin/sing-router
+UPLOAD_DEST ?= /opt/sbin/sing-router
 
 .PHONY: build build-arm64 upload test cover fakebox update-cn
 
