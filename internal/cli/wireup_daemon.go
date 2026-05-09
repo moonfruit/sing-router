@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"time"
@@ -10,8 +11,10 @@ import (
 	"github.com/moonfruit/sing-router/assets"
 	"github.com/moonfruit/sing-router/internal/config"
 	"github.com/moonfruit/sing-router/internal/daemon"
+	"github.com/moonfruit/sing-router/internal/gitee"
 	log "github.com/moonfruit/sing-router/internal/log"
 	"github.com/moonfruit/sing-router/internal/shell"
+	syncpkg "github.com/moonfruit/sing-router/internal/sync"
 	"github.com/moonfruit/sing-router/internal/version"
 )
 
@@ -103,6 +106,21 @@ func realRunDaemon(ctx context.Context, rundir string) error {
 		},
 	})
 
+	// Gitee 客户端（一份）：反向代理 handler 与 sync.Updater 共享同一实例。
+	// 缺少 token 时跳过反向代理与后台同步——仍允许 daemon 起动，便于排障。
+	var (
+		giteeProxy http.Handler
+		updater    *syncpkg.Updater
+	)
+	if cfg.Gitee.Token != "" {
+		gc := gitee.NewClient(cfg.Gitee)
+		gc.Retries = cfg.Download.HTTPRetries
+		giteeProxy = gc.NewProxyHandler()
+		updater = syncpkg.NewUpdater(cfg, rundir)
+	} else {
+		em.Warn("daemon", "gitee.disabled", "gitee.token empty; reverse proxy and background sync disabled", nil)
+	}
+
 	return daemon.Run(ctx, daemon.Options{
 		Rundir:     rundir,
 		Listen:     cfg.HTTP.Listen,
@@ -111,6 +129,12 @@ func realRunDaemon(ctx context.Context, rundir string) error {
 		Bus:        stack.Bus,
 		LogFile:    logPath,
 		Supervisor: sup,
+		GiteeProxy: giteeProxy,
+		Updater:    updater,
+		Sync: daemon.SyncLoopConfig{
+			IntervalSec:     cfg.Sync.SyncIntervalSeconds(),
+			OnStartDelaySec: cfg.Sync.SyncOnStartDelaySec(),
+		},
 		ReapplyRules: func(ctx context.Context) error {
 			if err := runner.Run(ctx, string(teardown), nil); err != nil {
 				em.Warn("shell", "shell.teardown.failed", "teardown best-effort failed: {Err}", map[string]any{"Err": err.Error()})

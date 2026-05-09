@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -10,6 +11,8 @@ import (
 	"time"
 
 	"github.com/moonfruit/sing2seq/clef"
+
+	syncpkg "github.com/moonfruit/sing-router/internal/sync"
 )
 
 // Options 是 daemon 入口接受的参数。
@@ -25,6 +28,13 @@ type Options struct {
 	CheckConfig  func(context.Context) error
 	StatusExtra  func() map[string]any
 	ScriptByName func(name string) ([]byte, error)
+
+	// GiteeProxy 是 /api/v1/proxy/gitee/ 路由的 handler；为 nil 表示未配置 gitee。
+	GiteeProxy http.Handler
+
+	// Updater 与 Sync 控制 daemon 后台资源同步；任一为 nil 时不启动后台 loop。
+	Updater *syncpkg.Updater
+	Sync    SyncLoopConfig
 }
 
 // Run 阻塞跑 daemon：HTTP listener + supervisor 主循环 + signal handling。
@@ -50,8 +60,14 @@ func Run(ctx context.Context, opts Options) error {
 		StatusExtra:  opts.StatusExtra,
 		ScriptByName: opts.ScriptByName,
 		ShutdownHook: cancel,
+		GiteeProxy:   opts.GiteeProxy,
 	}
 	mux := NewMux(deps)
+
+	// 后台资源同步（gitee → bin/sing-box / var/zoo.raw.json / var/cn.txt）。
+	if opts.Updater != nil {
+		StartSyncLoop(ctx, opts.Updater, opts.Sync, opts.Emitter)
+	}
 
 	httpDone := make(chan error, 1)
 	go func() { httpDone <- ServeHTTP(ctx, mux, opts.Listen) }()
