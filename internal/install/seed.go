@@ -49,6 +49,13 @@ func SeedDefaults(rundir string, vars TemplateVars) error {
 	}); err != nil {
 		return err
 	}
+	// cn.txt.etag 让首次 sync 直接从基线 etag 起步——避免 install 完成后第一次
+	// 后台 sync 重复下载已存在的 cn.txt 内容。
+	if err := writeIfMissing(rundir, "var/cn.txt.etag", func() ([]byte, error) {
+		return assets.ReadFile("var/cn.txt.etag")
+	}); err != nil {
+		return err
+	}
 	return writeIfMissing(rundir, "daemon.toml", func() ([]byte, error) {
 		return renderDaemonToml(vars)
 	})

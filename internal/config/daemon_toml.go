@@ -11,11 +11,6 @@ import (
 // DefaultCNListURL 是 daemon.toml 缺省时的 cn.txt 拉取地址。
 const DefaultCNListURL = "https://cdn.jsdelivr.net/gh/juewuy/ShellCrash@update/bin/geodata/china_ip_list.txt"
 
-// DefaultSingBoxURLTemplate 是 sing-box 二进制下载模板。
-//
-// Deprecated: 阶段 B 起 sing-box 改从 gitee 下载，本常量将在 M4 清理中移除。
-const DefaultSingBoxURLTemplate = "https://github.com/SagerNet/sing-box/releases/download/v{version}/sing-box-{version}-linux-arm64.tar.gz"
-
 // envGiteeToken 是允许覆盖 [gitee].token 的环境变量名。
 const envGiteeToken = "SING_ROUTER_GITEE_TOKEN"
 
@@ -72,13 +67,13 @@ type ZooConfig struct {
 	OutboundCollisionAction string   `toml:"outbound_collision_action"`
 }
 
+// DownloadConfig 仅保留与 cn.txt（公网）相关的下载配置。sing-box 与 zoo 改走
+// gitee 私仓（见 [gitee] 节）；阶段 B 之前的 mirror_prefix / sing_box_url_template /
+// sing_box_default_version 已删除。
 type DownloadConfig struct {
-	MirrorPrefix          string `toml:"mirror_prefix"`
-	SingBoxURLTemplate    string `toml:"sing_box_url_template"`
-	SingBoxDefaultVersion string `toml:"sing_box_default_version"`
-	CNListURL             string `toml:"cn_list_url"`
-	HTTPTimeoutSeconds    int    `toml:"http_timeout_seconds"`
-	HTTPRetries           int    `toml:"http_retries"`
+	CNListURL          string `toml:"cn_list_url"`
+	HTTPTimeoutSeconds int    `toml:"http_timeout_seconds"`
+	HTTPRetries        int    `toml:"http_retries"`
 }
 
 // GiteeConfig 描述访问 gitee 私有仓库所需的全局凭证与仓库定位。
@@ -184,11 +179,9 @@ func defaultConfig() *DaemonConfig {
 			OutboundCollisionAction: "reject",
 		},
 		Download: DownloadConfig{
-			SingBoxURLTemplate:    DefaultSingBoxURLTemplate,
-			SingBoxDefaultVersion: "latest",
-			CNListURL:             DefaultCNListURL,
-			HTTPTimeoutSeconds:    60,
-			HTTPRetries:           3,
+			CNListURL:          DefaultCNListURL,
+			HTTPTimeoutSeconds: 60,
+			HTTPRetries:        3,
 		},
 		Gitee: GiteeConfig{
 			Owner: "moonfruit",
@@ -251,12 +244,6 @@ func applyDefaults(cfg *DaemonConfig) {
 	}
 	if cfg.Zoo.OutboundCollisionAction == "" {
 		cfg.Zoo.OutboundCollisionAction = "reject"
-	}
-	if cfg.Download.SingBoxURLTemplate == "" {
-		cfg.Download.SingBoxURLTemplate = DefaultSingBoxURLTemplate
-	}
-	if cfg.Download.SingBoxDefaultVersion == "" {
-		cfg.Download.SingBoxDefaultVersion = "latest"
 	}
 	if cfg.Download.CNListURL == "" {
 		cfg.Download.CNListURL = DefaultCNListURL

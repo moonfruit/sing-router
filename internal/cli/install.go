@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"github.com/moonfruit/sing-router/internal/config"
 	"github.com/moonfruit/sing-router/internal/firmware"
 	"github.com/moonfruit/sing-router/internal/install"
+	syncpkg "github.com/moonfruit/sing-router/internal/sync"
 )
 
 // confirmStdin is overridable for tests.
@@ -24,9 +26,8 @@ func newInstallCmd() *cobra.Command {
 		rundir            string
 		downloadSingBox   bool
 		downloadCNList    bool
+		downloadZoo       bool
 		autoStart         bool
-		mirrorPrefix      string
-		singBoxVersion    string
 		firmwareFlag      string
 		yesFlag           bool
 		skipFirmwareHooks bool
@@ -49,12 +50,6 @@ func newInstallCmd() *cobra.Command {
 			}
 			if !cmd.Flags().Changed("start") {
 				autoStart = cfg.Install.AutoStart
-			}
-			if mirrorPrefix == "" {
-				mirrorPrefix = cfg.Download.MirrorPrefix
-			}
-			if singBoxVersion == "" {
-				singBoxVersion = cfg.Download.SingBoxDefaultVersion
 			}
 
 			run := func(label string, fn func() error) error {
@@ -124,34 +119,42 @@ func newInstallCmd() *cobra.Command {
 				}
 			}
 
-			// 5. Optional downloads.
-			if downloadSingBox {
-				version := singBoxVersion
-				if version == "latest" {
-					version = resolveLatestSingBoxVersion(mirrorPrefix)
-				}
-				if version == "" {
-					return fmt.Errorf("cannot resolve sing-box version (provide --sing-box-version explicitly)")
-				}
-				url := install.RenderURL(mirrorPrefix, cfg.Download.SingBoxURLTemplate, version)
-				tarball := filepath.Join(rundir, "var", "sing-box.tar.gz")
-				if err := run("download sing-box "+url, func() error {
-					return install.DownloadFile(url, tarball, cfg.Download.HTTPTimeoutSeconds, cfg.Download.HTTPRetries)
-				}); err != nil {
-					return err
-				}
-				if err := run("extract sing-box to bin/", func() error {
-					return extractSingBox(tarball, filepath.Join(rundir, "bin", "sing-box"))
-				}); err != nil {
-					return err
+			// 5. Optional downloads — 走 sync.Updater，与 sing-router update 命令同源。
+			//    sing-box 与 zoo 都来自 gitee 私仓，要求 token；cn.txt 走公网无需 token。
+			if downloadSingBox || downloadZoo {
+				if cfg.Gitee.Token == "" {
+					return fmt.Errorf("gitee.token is empty; set it in daemon.toml (or SING_ROUTER_GITEE_TOKEN) before downloading sing-box / zoo")
 				}
 			}
-			if downloadCNList {
-				url := install.RenderURL(mirrorPrefix, cfg.Download.CNListURL, "")
-				if err := run("download cn.txt "+url, func() error {
-					return install.DownloadFile(url, filepath.Join(rundir, "var", "cn.txt"), cfg.Download.HTTPTimeoutSeconds, cfg.Download.HTTPRetries)
-				}); err != nil {
-					return err
+			if downloadSingBox || downloadCNList || downloadZoo {
+				updater := syncpkg.NewUpdater(cfg, rundir)
+				ctx := context.Background()
+				if downloadSingBox {
+					if err := run("download + extract sing-box (gitee)", func() error {
+						_, version, err := updater.UpdateSingBox(ctx)
+						if err == nil && version != "" {
+							fmt.Fprintln(cmd.OutOrStdout(), "  → installed sing-box", version)
+						}
+						return err
+					}); err != nil {
+						return err
+					}
+				}
+				if downloadCNList {
+					if err := run("download cn.txt", func() error {
+						_, err := updater.UpdateCNList(ctx)
+						return err
+					}); err != nil {
+						return err
+					}
+				}
+				if downloadZoo {
+					if err := run("download zoo.json (gitee)", func() error {
+						_, err := updater.UpdateZoo(ctx)
+						return err
+					}); err != nil {
+						return err
+					}
 				}
 			}
 
@@ -182,11 +185,10 @@ func newInstallCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVarP(&rundir, "rundir", "D", "", "Runtime root directory (default /opt/home/sing-router)")
-	cmd.Flags().BoolVar(&downloadSingBox, "download-sing-box", false, "Download sing-box into bin/ (off on first install; pass --download-sing-box=true to opt in)")
+	cmd.Flags().BoolVar(&downloadSingBox, "download-sing-box", false, "Download sing-box (gitee) into bin/ (off on first install; pass --download-sing-box=true to opt in)")
 	cmd.Flags().BoolVar(&downloadCNList, "download-cn-list", false, "Download cn.txt into var/ (off on first install; pass --download-cn-list=true to opt in)")
+	cmd.Flags().BoolVar(&downloadZoo, "download-zoo", false, "Download zoo.json (gitee) into var/zoo.raw.json (requires gitee.token)")
 	cmd.Flags().BoolVar(&autoStart, "start", false, "Start init.d service after install (off on first install; pass --start=true to opt in)")
-	cmd.Flags().StringVar(&mirrorPrefix, "mirror-prefix", "", "Download mirror prefix (e.g. https://ghproxy.com/)")
-	cmd.Flags().StringVar(&singBoxVersion, "sing-box-version", "", "sing-box version to download (default latest)")
 	cmd.Flags().StringVar(&firmwareFlag, "firmware", "auto", "Firmware target: auto | koolshare | merlin")
 	cmd.Flags().BoolVar(&yesFlag, "yes", false, "Skip Merlin warning interactive confirmation")
 	cmd.Flags().BoolVar(&skipFirmwareHooks, "skip-firmware-hooks", false, "Skip firmware-specific hook installation")
@@ -234,60 +236,8 @@ func confirmMerlin(out io.Writer, in io.Reader) bool {
 	return ans == "y" || ans == "yes"
 }
 
-// payloadOnly removed — moved to internal/firmware/merlin.go (readSnippetPayload).
-
-// resolveLatestSingBoxVersion currently returns a hardcoded fallback (Phase B will resolve via API).
-func resolveLatestSingBoxVersion(_ string) string {
-	return "1.13.5"
-}
-
-func extractSingBox(tarball, target string) error {
-	if _, err := os.Stat(tarball); err != nil {
-		return err
-	}
-	tmpDir := filepath.Join(filepath.Dir(target), ".extract")
-	if err := os.MkdirAll(tmpDir, 0o755); err != nil {
-		return err
-	}
-	if err := runShell("tar", "-xzf", tarball, "-C", tmpDir); err != nil {
-		return err
-	}
-	found, err := findSingBoxBinary(tmpDir)
-	if err != nil {
-		return err
-	}
-	if err := os.Rename(found, target+".new"); err != nil {
-		return err
-	}
-	if err := os.Chmod(target+".new", 0o755); err != nil {
-		return err
-	}
-	if err := os.Rename(target+".new", target); err != nil {
-		return err
-	}
-	return os.RemoveAll(tmpDir)
-}
-
-func findSingBoxBinary(dir string) (string, error) {
-	var found string
-	err := filepath.Walk(dir, func(p string, info os.FileInfo, walkErr error) error {
-		if walkErr != nil || info.IsDir() {
-			return walkErr
-		}
-		if filepath.Base(p) == "sing-box" {
-			found = p
-		}
-		return nil
-	})
-	if err != nil {
-		return "", err
-	}
-	if found == "" {
-		return "", fmt.Errorf("sing-box binary not found in tarball")
-	}
-	return found, nil
-}
-
+// runShell is the small wrapper used to launch /opt/etc/init.d/S99sing-router during
+// install --start. sing-box / cn / zoo download were moved to internal/sync in 阶段 B.
 func runShell(name string, args ...string) error {
 	return osexecCommand(name, args...).Run()
 }

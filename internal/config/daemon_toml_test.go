@@ -29,9 +29,6 @@ rule_set_dedup_strategy   = "builtin_wins"
 outbound_collision_action = "reject"
 
 [download]
-mirror_prefix          = ""
-sing_box_url_template  = "https://github.com/SagerNet/sing-box/releases/download/v{version}/sing-box-{version}-linux-arm64.tar.gz"
-sing_box_default_version = "latest"
 cn_list_url            = "https://example.com/cn.txt"
 http_timeout_seconds   = 60
 http_retries           = 3

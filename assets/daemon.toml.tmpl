@@ -37,12 +37,34 @@ rule_set_dedup_strategy   = "builtin_wins"
 outbound_collision_action = "reject"
 
 [download]
-mirror_prefix            = ""
-sing_box_url_template    = "https://github.com/SagerNet/sing-box/releases/download/v{version}/sing-box-{version}-linux-arm64.tar.gz"
-sing_box_default_version = "latest"
+# cn.txt 走公网 cdn，不走 gitee；sing-box / zoo 见 [gitee] 节。
 cn_list_url              = "https://cdn.jsdelivr.net/gh/juewuy/ShellCrash@update/bin/geodata/china_ip_list.txt"
 http_timeout_seconds     = 60
 http_retries             = 3
+
+[gitee]
+# 必填：私仓 access_token；也可由环境变量 SING_ROUTER_GITEE_TOKEN 覆盖。
+token = ""
+owner = "moonfruit"
+repo  = "private"
+
+[gitee.sing_box]
+ref                   = "binary"
+version_path          = "version.txt"
+tarball_path_template = "sing-box-{version}-linux-arm64-musl.tar.gz"
+
+[gitee.zoo]
+ref  = "main"
+path = "config.json"
+
+# rule_set 反向代理无需在此声明 ref：
+# dns.json 里 URL 形如 http://127.0.0.1:9998/api/v1/proxy/gitee/main/private/rules/xxx.srs
+# proxy handler 从 URL path 解析 ref，调用方决定。
+
+[sync]
+# 后台周期同步：interval_seconds = 0 即禁用（仅留 sing-router update CLI）。
+interval_seconds   = 21600
+on_start_delay_sec = 300
 
 [router]
 # dns_port      = 1053
