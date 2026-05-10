@@ -47,6 +47,16 @@ func TestInstall_NoDebugOnlyStillWritesInitd(t *testing.T) {
 	mustContain(t, out, "Next steps:")
 }
 
+// 回归保护：首次 install 时 cfg 在 SeedDefaults 之前加载，daemon.toml 尚未渲染，
+// 若 --gitee-token 不被作为 cfg 的运行时覆盖，下方 token 校验必报 "gitee.token is empty"。
+func TestInstall_GiteeTokenFlagAllowsDownloads(t *testing.T) {
+	out := runInstallDryRun(t, "--debug-only", "--download-sing-box", "--download-zoo", "--gitee-token=tk-123")
+
+	mustNotContain(t, out, "gitee.token is empty")
+	mustContain(t, out, "[dry-run] download + extract sing-box (gitee)")
+	mustContain(t, out, "[dry-run] download zoo.json (gitee)")
+}
+
 func mustContain(t *testing.T, haystack, needle string) {
 	t.Helper()
 	if !strings.Contains(haystack, needle) {

@@ -46,6 +46,13 @@ func newInstallCmd() *cobra.Command {
 				return err
 			}
 			cfg, _ := config.LoadDaemonConfig(filepath.Join(rundir, "daemon.toml"))
+			// CLI --gitee-token 视作 cfg 的运行时覆盖，与 SING_ROUTER_GITEE_TOKEN 同源。
+			// cfg 在 SeedDefaults 之前加载；首次 install 时 daemon.toml 尚未渲染，
+			// 缺这一步则 cfg.Gitee.Token 永远为空，下方的 token 校验与 syncpkg.NewUpdater
+			// 都拿不到 token。
+			if giteeToken != "" {
+				cfg.Gitee.Token = giteeToken
+			}
 			if !cmd.Flags().Changed("download-sing-box") {
 				downloadSingBox = cfg.Install.DownloadSingBox
 			}
@@ -202,9 +209,9 @@ func newInstallCmd() *cobra.Command {
 		"Seed rundir without writing /opt/etc/init.d or firmware hooks "+
 			"(for manual 'sing-router daemon -D' runs; implies --start=false)")
 	cmd.Flags().StringVar(&giteeToken, "gitee-token", "",
-		"Gitee private repo access token; written into [gitee].token of daemon.toml on first install. "+
-			"Only effective when daemon.toml does not yet exist (seed step skips existing files). "+
-			"Existing installs: edit daemon.toml directly or set SING_ROUTER_GITEE_TOKEN env var.")
+		"Gitee private repo access token. On first install, written into [gitee].token of daemon.toml. "+
+			"On re-install, used as a runtime override for downloads in this command (daemon.toml is left untouched; "+
+			"edit it directly or set SING_ROUTER_GITEE_TOKEN to persist).")
 	return cmd
 }
 
