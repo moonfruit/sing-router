@@ -110,20 +110,51 @@ func realRunDaemon(ctx context.Context, rundir string) error {
 	startup := assets.MustReadFile("shell/startup.sh")
 	teardown := assets.MustReadFile("shell/teardown.sh")
 
+	// Ready check: 容纳 sing-box 冷启动（cache-file 加载 + rule-set 下载 +
+	// router 启动）。默认 60s；用户可在 daemon.toml [supervisor] 节覆盖。
+	totalTimeout := 60 * time.Second
+	if v := cfg.Supervisor.ReadyCheckTimeoutMs; v != nil && *v > 0 {
+		totalTimeout = time.Duration(*v) * time.Millisecond
+	}
+	interval := 200 * time.Millisecond
+	if v := cfg.Supervisor.ReadyCheckIntervalMs; v != nil && *v > 0 {
+		interval = time.Duration(*v) * time.Millisecond
+	}
+	clashURL := "http://127.0.0.1:9999/version"
+	if v := cfg.Supervisor.ReadyCheckClashAPI; v != nil && !*v {
+		clashURL = ""
+	}
+	var dials []string
+	if v := cfg.Supervisor.ReadyCheckDialInbounds; v == nil || *v {
+		dials = []string{
+			fmt.Sprintf("127.0.0.1:%d", routing.DnsPort),
+			fmt.Sprintf("127.0.0.1:%d", routing.RedirectPort),
+		}
+	}
+
+	stopGrace := time.Duration(0)
+	if v := cfg.Supervisor.StopGraceSeconds; v != nil && *v > 0 {
+		stopGrace = time.Duration(*v) * time.Second
+	}
+	iptablesKeepBackoff := 0
+	if v := cfg.Supervisor.IptablesKeepWhenBackoffLtMs; v != nil {
+		iptablesKeepBackoff = *v
+	}
+
 	sup := daemon.New(daemon.SupervisorConfig{
 		Emitter:       em,
 		SingBoxBinary: filepath.Join(rundir, cfg.Runtime.SingBoxBinary),
 		SingBoxArgs:   []string{"run", "-D", rundir, "-C", cfg.Runtime.ConfigDir},
 		SingBoxDir:    rundir,
 		ReadyConfig: daemon.ReadyConfig{
-			TCPDials: []string{
-				fmt.Sprintf("127.0.0.1:%d", routing.DnsPort),
-				fmt.Sprintf("127.0.0.1:%d", routing.RedirectPort),
-			},
-			ClashAPIURL:  "http://127.0.0.1:9999/version",
-			TotalTimeout: 5 * time.Second,
-			Interval:     200 * time.Millisecond,
+			TCPDials:     dials,
+			ClashAPIURL:  clashURL,
+			TotalTimeout: totalTimeout,
+			Interval:     interval,
 		},
+		BackoffMs:               cfg.Supervisor.CrashPostReadyBackoffMs,
+		IptablesKeepBackoffLtMs: iptablesKeepBackoff,
+		StopGrace:               stopGrace,
 		StartupHook: func(ctx context.Context) error {
 			em.Info("shell", "shell.startup.exec", "running startup.sh", nil)
 			if err := runner.Run(ctx, string(startup), nil); err != nil {
