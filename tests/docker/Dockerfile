@@ -16,7 +16,7 @@ FROM debian:stable-slim AS base
 # iproute2/iptables/ipset 给 startup.sh 真实 teardown 时用。
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-        bash curl wget ca-certificates tzdata procps tini busybox-static \
+        bash curl wget ca-certificates tzdata procps tini busybox-static jq \
         coreutils findutils grep sed iproute2 iptables ipset \
     && rm -rf /var/lib/apt/lists/*
 

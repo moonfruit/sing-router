@@ -53,28 +53,6 @@
       { "ip_is_private": true, "outbound": "DIRECT" },
       { "action": "sniff-override-destination" }
     ],
-    "rule_set": [
-      {
-        "type": "remote",
-        "tag": "GeoIP@CN",
-        "url": "http://127.0.0.1:9998/api/v1/proxy/gitee/main/rules/geoip-cn.srs"
-      },
-      {
-        "type": "remote",
-        "tag": "GeoSites@CN",
-        "url": "http://127.0.0.1:9998/api/v1/proxy/gitee/main/rules/geosites-cn.srs"
-      },
-      {
-        "type": "remote",
-        "tag": "Lan",
-        "url": "http://127.0.0.1:9998/api/v1/proxy/gitee/main/rules/lan.srs"
-      },
-      {
-        "type": "remote",
-        "tag": "FakeIpBypass",
-        "url": "http://127.0.0.1:9998/api/v1/proxy/gitee/main/rules/fakeip-bypass.srs"
-      }
-    ],
     "auto_detect_interface": true,
     "default_domain_resolver": "dns-direct",
     "default_mark": "0x7890"

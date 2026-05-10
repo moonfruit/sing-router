@@ -191,6 +191,28 @@ sleep 2
 ex 'sing-router status; true'
 ex '! sing-router status 2>/dev/null | grep -qE "sing-box: pid=[1-9][0-9]*"'
 
+# ------------------------------------------------------------------ Phase F-pre
+# 真 sing-box 路径下，verify zoo.raw.json 已被 daemon 预处理写入 config.d/zoo.json。
+# 种子 zoo.json 只有 1 个 outbound（"主"/默认 → DIRECT 选择器）；预处理后必须包含
+# 用户 gitee 仓库 config.json 中的 outbound 列表，所以数量 > 1。
+if [ "$sing_box_source" = "real (gitee download)" ]; then
+    step "Phase F-pre  zoo preprocess (var/zoo.raw.json → config.d/zoo.json)"
+    ex 'test -s /opt/home/sing-router/var/zoo.raw.json'
+    ex 'test -s /opt/home/sing-router/config.d/zoo.json'
+    # 处理后 outbounds 数量 > 1（种子只有 1 个）
+    ex 'test "$(jq ".outbounds | length" /opt/home/sing-router/config.d/zoo.json)" -gt 1'
+    # rule_set 也应该被处理后保留（种子无 rule_set）
+    ex 'test "$(jq ".route.rule_set | length // 0" /opt/home/sing-router/config.d/zoo.json)" -ge 0'
+    ex 'echo "config.d/zoo.json size: $(wc -c < /opt/home/sing-router/config.d/zoo.json) bytes; outbounds: $(jq ".outbounds | length" /opt/home/sing-router/config.d/zoo.json)"'
+    # rule-set.json 是 EnsureRequiredRuleSets 的产物：用户 zoo 已 cover 全部 required tag → 不存在；
+    # 缺了哪个 → 存在并补齐。两种情况都正常。
+    ex 'if [ -f /opt/home/sing-router/config.d/rule-set.json ]; then \
+            echo "rule-set.json: $(jq -r "[.route.rule_set[].tag] | join(\",\")" /opt/home/sing-router/config.d/rule-set.json)"; \
+        else \
+            echo "rule-set.json: absent (user zoo provides all required tags)"; \
+        fi'
+fi
+
 # ------------------------------------------------------------------ Phase F
 step "Phase F  uninstall (rolls back hooks; rundir kept unless --purge)"
 ex 'sing-router uninstall'

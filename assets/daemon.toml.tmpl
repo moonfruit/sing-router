@@ -57,10 +57,10 @@ tarball_path_template = "sing-box-{version}-linux-arm64-musl.tar.gz"
 ref  = "main"
 path = "config.json"
 
-# rule_set 反向代理无需在此声明 ref：
-# dns.json 里 URL 形如 http://127.0.0.1:9998/api/v1/proxy/gitee/main/rules/xxx.srs
-# 这里的 main 是 ref；rules/xxx.srs 是仓库内路径（owner/repo 由本节配置决定）。
-# proxy handler 从 URL path 解析 ref，调用方决定。
+# rule_set 处理：dns.json 不再自带 rule_set 定义，daemon 启动时 EnsureRequiredRuleSets
+# 会按需把缺失的 tag 写到 config.d/rule-set.json，URL 直接是 https://gitee.com/...
+# （含 access_token），不走 proxy。用户的 zoo.raw.json 若已声明同名 tag 则优先生效。
+# ref 复用 [gitee.zoo].ref（默认 "main"）。
 
 [sync]
 # 后台周期同步：interval_seconds = 0 即禁用（仅留 sing-router update CLI）。

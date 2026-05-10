@@ -60,6 +60,38 @@ func realRunDaemon(ctx context.Context, rundir string) error {
 	em := stack.Emitter
 	em.Info("supervisor", "supervisor.boot.started", "starting daemon at {Rundir}", map[string]any{"Rundir": rundir})
 
+	// 把 var/zoo.raw.json（由 sync.Updater 拉取）预处理写入 config.d/zoo.json。
+	// 缺失即跳过，保留种子默认；预处理失败仅警告，daemon 继续用上次成功的 zoo.json。
+	if stats, err := config.PreprocessZooFile(rundir, cfg.Runtime.ConfigDir); err != nil {
+		em.Warn("config", "config.zoo.preprocess.failed", "preprocess zoo: {Err}", map[string]any{"Err": err.Error()})
+	} else if stats != nil {
+		em.Info("config", "config.zoo.preprocess.ok",
+			"zoo preprocessed: outbounds={OutboundCount} rule_sets={RuleSetCount} dropped={DroppedFields}",
+			map[string]any{
+				"OutboundCount": stats.OutboundCount,
+				"RuleSetCount":  stats.RuleSetCount,
+				"DroppedFields": stats.DroppedFields,
+			})
+	}
+
+	// 静态 fragment（dns.json 等）引用了一些 rule_set tag 但不再自行声明；
+	// 若 zoo.json 也没补足，本步用真实 gitee URL（含 token）写一个补充 fragment。
+	// 没有 token 时跳过——daemon 下面会再次警告。
+	if cfg.Gitee.Token != "" {
+		gc := gitee.NewClient(cfg.Gitee)
+		ref := cfg.Gitee.Zoo.Ref
+		if ref == "" {
+			ref = "main"
+		}
+		if added, err := config.EnsureRequiredRuleSets(rundir, cfg.Runtime.ConfigDir, gc.RawURL, ref, config.DefaultRequiredRuleSets); err != nil {
+			em.Warn("config", "config.rule_sets.supplement.failed", "supplement rule_sets: {Err}", map[string]any{"Err": err.Error()})
+		} else if len(added) > 0 {
+			em.Info("config", "config.rule_sets.supplement.ok",
+				"supplemented {Count} rule_set tags via gitee: {Tags}",
+				map[string]any{"Count": len(added), "Tags": added})
+		}
+	}
+
 	routing := config.LoadRouting(cfg)
 	cnPath := filepath.Join(rundir, "var", "cn.txt")
 	runner := shell.NewRunner(shell.RunnerConfig{

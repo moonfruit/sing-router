@@ -135,19 +135,29 @@ func Preprocess(in PreprocessInput) (*PreprocessResult, error) {
 		}
 	}
 
-	// ---- dedup rule_set by URL（builtin_wins） ----
+	// ---- dedup rule_set（builtin_wins）：URL 命中或 tag 命中都让 builtin 赢 ----
+	// URL 命中：rewriteMap 把用户 tag 改写为 builtin tag（不同名时引用更新）。
+	// Tag 命中（不同 URL）：直接 drop 用户条目；route.rules 里仍写同一个 tag，
+	// 由 builtin 的同名 rule_set 提供——避免 sing-box "duplicate rule-set tag"。
 	rewriteMap := map[string]string{} // zooTag -> builtinTag
 	var deduped []map[string]any
 	if len(ruleSetEntries) > 0 {
 		builtinByURL := map[string]string{}
+		builtinByTag := map[string]struct{}{}
 		for _, e := range in.BuiltinRuleSetIndex {
 			builtinByURL[e.URL] = e.Tag
+			builtinByTag[e.Tag] = struct{}{}
 		}
 		for _, entry := range ruleSetEntries {
 			url, _ := entry["url"].(string)
 			tag, _ := entry["tag"].(string)
 			if builtinTag, ok := builtinByURL[url]; ok && url != "" {
 				rewriteMap[tag] = builtinTag
+				stats.RuleSetDedupDropped++
+				continue
+			}
+			if _, hit := builtinByTag[tag]; hit {
+				// Tag 撞名（URL 不同）→ builtin 赢；用户引用同 tag 自然落到 builtin
 				stats.RuleSetDedupDropped++
 				continue
 			}
