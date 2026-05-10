@@ -1,5 +1,7 @@
 .*
 !.git*
+!.dockerignore
+!.sops.yaml
 
 /example
 /sing-router

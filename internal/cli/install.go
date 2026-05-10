@@ -33,6 +33,7 @@ func newInstallCmd() *cobra.Command {
 		skipFirmwareHooks bool
 		dryRun            bool
 		debugOnly         bool
+		giteeToken        string
 	)
 	cmd := &cobra.Command{
 		Use:   "install",
@@ -40,6 +41,9 @@ func newInstallCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if rundir == "" {
 				rundir = "/opt/home/sing-router"
+			}
+			if err := validateGiteeToken(giteeToken); err != nil {
+				return err
 			}
 			cfg, _ := config.LoadDaemonConfig(filepath.Join(rundir, "daemon.toml"))
 			if !cmd.Flags().Changed("download-sing-box") {
@@ -85,6 +89,7 @@ func newInstallCmd() *cobra.Command {
 				DownloadZashboard: cfg.Install.DownloadZashboard,
 				AutoStart:         autoStart,
 				Firmware:          string(kind),
+				GiteeToken:        giteeToken,
 			}
 			if err := run("seed default config.d/* and render daemon.toml", func() error {
 				return install.SeedDefaults(rundir, vars)
@@ -196,7 +201,26 @@ func newInstallCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&debugOnly, "debug-only", false,
 		"Seed rundir without writing /opt/etc/init.d or firmware hooks "+
 			"(for manual 'sing-router daemon -D' runs; implies --start=false)")
+	cmd.Flags().StringVar(&giteeToken, "gitee-token", "",
+		"Gitee private repo access token; written into [gitee].token of daemon.toml on first install. "+
+			"Only effective when daemon.toml does not yet exist (seed step skips existing files). "+
+			"Existing installs: edit daemon.toml directly or set SING_ROUTER_GITEE_TOKEN env var.")
 	return cmd
+}
+
+// validateGiteeToken rejects tokens that would break the TOML render.
+// gitee 个人 access token 在常见字符集内，永远不会触发；防御性兜底，避免渲染畸形 TOML。
+func validateGiteeToken(token string) error {
+	if token == "" {
+		return nil
+	}
+	for _, r := range token {
+		switch r {
+		case '"', '\\', '\n', '\r':
+			return fmt.Errorf("--gitee-token contains an unsafe character (%q); allowed: alphanumerics, hyphens, underscores", r)
+		}
+	}
+	return nil
 }
 
 // resolveFirmware applies the precedence: CLI flag > daemon.toml > Detect() > reject.

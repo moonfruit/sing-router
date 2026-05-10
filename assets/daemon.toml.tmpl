@@ -43,8 +43,8 @@ http_timeout_seconds     = 60
 http_retries             = 3
 
 [gitee]
-# 必填：私仓 access_token；也可由环境变量 SING_ROUTER_GITEE_TOKEN 覆盖。
-token = ""
+# 必填：私仓 access_token；也可由环境变量 SING_ROUTER_GITEE_TOKEN 覆盖，或 install 时传 --gitee-token。
+token = "{{ .GiteeToken }}"
 owner = "moonfruit"
 repo  = "private"
 
@@ -58,7 +58,8 @@ ref  = "main"
 path = "config.json"
 
 # rule_set 反向代理无需在此声明 ref：
-# dns.json 里 URL 形如 http://127.0.0.1:9998/api/v1/proxy/gitee/main/private/rules/xxx.srs
+# dns.json 里 URL 形如 http://127.0.0.1:9998/api/v1/proxy/gitee/main/rules/xxx.srs
+# 这里的 main 是 ref；rules/xxx.srs 是仓库内路径（owner/repo 由本节配置决定）。
 # proxy handler 从 URL path 解析 ref，调用方决定。
 
 [sync]

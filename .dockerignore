@@ -1,0 +1,14 @@
+# Docker build context filter for tests/docker/Dockerfile.
+# 仅 COPY sing-router-linux-arm64 + tests/docker/ 进镜像，其它都可剔。
+.git
+.gitignore
+.idea
+.vscode
+*.md
+docs/
+example/
+dist/
+coverage.out
+coverage.html
+upload.sh
+testdata/

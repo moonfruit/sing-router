@@ -4,6 +4,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
+	"syscall"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -26,10 +30,12 @@ func newUninstallCmd() *cobra.Command {
 				rundir = "/opt/home/sing-router"
 			}
 
-			// 1. stop service if present
-			if _, err := os.Stat("/opt/etc/init.d/S99sing-router"); err == nil {
-				_ = runShell("/opt/etc/init.d/S99sing-router", "stop")
-			}
+			// 1. stop daemon if running. We DON'T call `S99sing-router stop` because
+			// entware's rc.func stops via `killall <PROC>` (PROC=sing-router), which
+			// would also SIGTERM this very `sing-router uninstall` process. Read the
+			// PID file written by the daemon (rundir/run/sing-router.pid) and signal
+			// it directly.
+			stopDaemonByPidFile(filepath.Join(rundir, "run", "sing-router.pid"))
 
 			// 2. resolve firmware from daemon.toml; default to koolshare on missing
 			tomlPath := filepath.Join(rundir, "daemon.toml")
@@ -69,4 +75,33 @@ func newUninstallCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&keepInit, "keep-init", false, "Don't delete /opt/etc/init.d/S99sing-router")
 	cmd.Flags().StringVarP(&rundir, "rundir", "D", "", "Runtime root directory (for --purge)")
 	return cmd
+}
+
+// stopDaemonByPidFile signals SIGTERM to the daemon recorded in pidFile and
+// waits up to ~5s for it to exit, then SIGKILLs as a fallback. Silently returns
+// if the file is missing, malformed, or the process is already gone.
+func stopDaemonByPidFile(pidFile string) {
+	data, err := os.ReadFile(pidFile)
+	if err != nil {
+		return
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil || pid <= 1 || pid == os.Getpid() {
+		return
+	}
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return
+	}
+	if err := proc.Signal(syscall.SIGTERM); err != nil {
+		return
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if err := proc.Signal(syscall.Signal(0)); err != nil {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	_ = proc.Signal(syscall.SIGKILL)
 }

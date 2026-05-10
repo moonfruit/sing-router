@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck shell=busybox
 # ============================================================
 # sing-router startup script (managed; embedded into the Go binary).
 # 全部参数从环境变量读取（由 sing-router daemon 注入），不在脚本内硬编码。

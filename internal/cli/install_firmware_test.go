@@ -48,3 +48,25 @@ func TestConfirmMerlin_NoOrEmptyRejected(t *testing.T) {
 		}
 	}
 }
+
+func TestValidateGiteeToken_AcceptsSafeAndEmpty(t *testing.T) {
+	for _, tok := range []string{"", "abc123", "ghp_AbCdEfG-_HiJkLmN1234567"} {
+		if err := validateGiteeToken(tok); err != nil {
+			t.Errorf("token %q should be accepted, got %v", tok, err)
+		}
+	}
+}
+
+func TestValidateGiteeToken_RejectsUnsafeChars(t *testing.T) {
+	cases := []string{
+		`abc"123`,
+		`abc\123`,
+		"abc\n123",
+		"abc\r123",
+	}
+	for _, tok := range cases {
+		if err := validateGiteeToken(tok); err == nil {
+			t.Errorf("token %q should be rejected", tok)
+		}
+	}
+}

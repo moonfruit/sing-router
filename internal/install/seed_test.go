@@ -81,6 +81,41 @@ func TestSeedRendersTemplateVars(t *testing.T) {
 	}
 }
 
+func TestSeedRendersGiteeToken(t *testing.T) {
+	dir := t.TempDir()
+	if err := EnsureLayout(dir); err != nil {
+		t.Fatal(err)
+	}
+	vars := TemplateVars{Firmware: "koolshare", GiteeToken: "abc123"}
+	if err := SeedDefaults(dir, vars); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "daemon.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `token = "abc123"`) {
+		t.Errorf("daemon.toml missing token = \"abc123\"\n--- got ---\n%s", data)
+	}
+}
+
+func TestSeedRendersEmptyGiteeToken(t *testing.T) {
+	dir := t.TempDir()
+	if err := EnsureLayout(dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := SeedDefaults(dir, TemplateVars{Firmware: "koolshare"}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "daemon.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `token = ""`) {
+		t.Errorf("daemon.toml should default token to empty string\n--- got ---\n%s", data)
+	}
+}
+
 func TestSeedPreservesExisting(t *testing.T) {
 	dir := t.TempDir()
 	if err := EnsureLayout(dir); err != nil {

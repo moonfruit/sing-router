@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -147,7 +148,9 @@ func readETag(path string) string {
 	if err != nil {
 		return ""
 	}
-	return string(b)
+	// 末尾 \n / \r 来自手工编辑或 echo > file，会让 If-None-Match 头校验失败
+	// （net/http: invalid header field value）。统一去掉首尾空白。
+	return strings.TrimSpace(string(b))
 }
 
 func writeETag(path, etag string) error {

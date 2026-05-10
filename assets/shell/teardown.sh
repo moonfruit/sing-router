@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck shell=busybox
 # ============================================================
 # sing-router teardown script. 撤销 startup.sh 安装的所有规则。
 # 幂等：每条规则用 -C 检测后再 -D；不存在不报错。

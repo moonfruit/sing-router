@@ -7,7 +7,7 @@ CN_LIST_URL ?= https://cdn.jsdelivr.net/gh/juewuy/ShellCrash@update/bin/geodata/
 
 UPLOAD_DEST ?= /opt/sbin/sing-router
 
-.PHONY: build build-arm64 upload test cover fakebox update-cn
+.PHONY: build build-arm64 upload test cover fakebox update-cn docker-test
 
 build:
 	$(GO) build -trimpath -ldflags '$(LDFLAGS)' -o $(BIN) ./cmd/sing-router
@@ -27,6 +27,9 @@ cover:
 
 fakebox:
 	testdata/fake-sing-box/build.sh
+
+docker-test:
+	@tests/docker/docker-test.sh
 
 update-cn:
 	@rm -f assets/var/cn.txt.new
