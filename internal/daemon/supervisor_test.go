@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -118,6 +119,36 @@ func TestSupervisorBootPreReadyFailEntersFatal(t *testing.T) {
 	}
 	if sup.State() != StateFatal {
 		t.Fatalf("state: %v", sup.State())
+	}
+}
+
+// 回归保护：sing-box 冷启动慢于 ready check TotalTimeout 时，supervisor 必须
+// 报 "ready check" 错并进 fatal，且子进程被 kill。这条用例锁死 TotalTimeout 是
+// 必须暴露给业务方的旋钮——任何把它写死成小常量的回归都会被这条测试拍下。
+func TestSupervisorBootTimesOutWhenSingBoxStartsTooSlow(t *testing.T) {
+	binary := fakeSingBox(t)
+	p := freePort(t)
+	sup := New(SupervisorConfig{
+		Emitter:       newTestEmitter(t),
+		SingBoxBinary: binary,
+		// ready-delay (1s) > TotalTimeout (200ms)：fake 还没 listen 就被判超时
+		SingBoxArgs: []string{"--listen", strconv.Itoa(p), "--ready-delay", "1s"},
+		ReadyConfig: ReadyConfig{
+			TCPDials:     []string{fmt.Sprintf("127.0.0.1:%d", p)},
+			TotalTimeout: 200 * time.Millisecond,
+			Interval:     50 * time.Millisecond,
+		},
+		StopGrace: 1 * time.Second,
+	})
+	err := sup.Boot(context.Background())
+	if err == nil {
+		t.Fatal("expected ready check timeout error")
+	}
+	if !strings.Contains(err.Error(), "ready check") {
+		t.Fatalf("err should mention ready check: %v", err)
+	}
+	if sup.State() != StateFatal {
+		t.Fatalf("state: %v want StateFatal", sup.State())
 	}
 }
 

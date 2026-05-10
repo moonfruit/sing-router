@@ -110,51 +110,17 @@ func realRunDaemon(ctx context.Context, rundir string) error {
 	startup := assets.MustReadFile("shell/startup.sh")
 	teardown := assets.MustReadFile("shell/teardown.sh")
 
-	// Ready check: 容纳 sing-box 冷启动（cache-file 加载 + rule-set 下载 +
-	// router 启动）。默认 60s；用户可在 daemon.toml [supervisor] 节覆盖。
-	totalTimeout := 60 * time.Second
-	if v := cfg.Supervisor.ReadyCheckTimeoutMs; v != nil && *v > 0 {
-		totalTimeout = time.Duration(*v) * time.Millisecond
-	}
-	interval := 200 * time.Millisecond
-	if v := cfg.Supervisor.ReadyCheckIntervalMs; v != nil && *v > 0 {
-		interval = time.Duration(*v) * time.Millisecond
-	}
-	clashURL := "http://127.0.0.1:9999/version"
-	if v := cfg.Supervisor.ReadyCheckClashAPI; v != nil && !*v {
-		clashURL = ""
-	}
-	var dials []string
-	if v := cfg.Supervisor.ReadyCheckDialInbounds; v == nil || *v {
-		dials = []string{
-			fmt.Sprintf("127.0.0.1:%d", routing.DnsPort),
-			fmt.Sprintf("127.0.0.1:%d", routing.RedirectPort),
-		}
-	}
-
-	stopGrace := time.Duration(0)
-	if v := cfg.Supervisor.StopGraceSeconds; v != nil && *v > 0 {
-		stopGrace = time.Duration(*v) * time.Second
-	}
-	iptablesKeepBackoff := 0
-	if v := cfg.Supervisor.IptablesKeepWhenBackoffLtMs; v != nil {
-		iptablesKeepBackoff = *v
-	}
+	wiring := buildSupervisorWiring(cfg.Supervisor, routing.DnsPort, routing.RedirectPort)
 
 	sup := daemon.New(daemon.SupervisorConfig{
-		Emitter:       em,
-		SingBoxBinary: filepath.Join(rundir, cfg.Runtime.SingBoxBinary),
-		SingBoxArgs:   []string{"run", "-D", rundir, "-C", cfg.Runtime.ConfigDir},
-		SingBoxDir:    rundir,
-		ReadyConfig: daemon.ReadyConfig{
-			TCPDials:     dials,
-			ClashAPIURL:  clashURL,
-			TotalTimeout: totalTimeout,
-			Interval:     interval,
-		},
-		BackoffMs:               cfg.Supervisor.CrashPostReadyBackoffMs,
-		IptablesKeepBackoffLtMs: iptablesKeepBackoff,
-		StopGrace:               stopGrace,
+		Emitter:                 em,
+		SingBoxBinary:           filepath.Join(rundir, cfg.Runtime.SingBoxBinary),
+		SingBoxArgs:             []string{"run", "-D", rundir, "-C", cfg.Runtime.ConfigDir},
+		SingBoxDir:              rundir,
+		ReadyConfig:             wiring.Ready,
+		BackoffMs:               wiring.BackoffMs,
+		IptablesKeepBackoffLtMs: wiring.IptablesKeepBackoffLtMs,
+		StopGrace:               wiring.StopGrace,
 		StartupHook: func(ctx context.Context) error {
 			em.Info("shell", "shell.startup.exec", "running startup.sh", nil)
 			if err := runner.Run(ctx, string(startup), nil); err != nil {
@@ -217,6 +183,59 @@ func realRunDaemon(ctx context.Context, rundir string) error {
 			return assets.ReadFile(path)
 		},
 	})
+}
+
+// supervisorWiring 是 [supervisor] 节 + routing 端口 ↦ daemon.SupervisorConfig
+// 的子集。抽出来便于单测覆盖默认值与 toml 覆盖。
+type supervisorWiring struct {
+	Ready                   daemon.ReadyConfig
+	BackoffMs               []int
+	IptablesKeepBackoffLtMs int
+	StopGrace               time.Duration
+}
+
+// buildSupervisorWiring 把 daemon.toml [supervisor] 节翻译成 supervisor 运行参数。
+// 默认 ready check 总超时 60s（容纳 sing-box 冷启：cache-file 加载 + rule-set
+// 下载 + router 启动），用户可在 daemon.toml 覆盖。
+func buildSupervisorWiring(s config.SupervisorConfig, dnsPort, redirectPort int) supervisorWiring {
+	totalTimeout := 60 * time.Second
+	if v := s.ReadyCheckTimeoutMs; v != nil && *v > 0 {
+		totalTimeout = time.Duration(*v) * time.Millisecond
+	}
+	interval := 200 * time.Millisecond
+	if v := s.ReadyCheckIntervalMs; v != nil && *v > 0 {
+		interval = time.Duration(*v) * time.Millisecond
+	}
+	clashURL := "http://127.0.0.1:9999/version"
+	if v := s.ReadyCheckClashAPI; v != nil && !*v {
+		clashURL = ""
+	}
+	var dials []string
+	if v := s.ReadyCheckDialInbounds; v == nil || *v {
+		dials = []string{
+			fmt.Sprintf("127.0.0.1:%d", dnsPort),
+			fmt.Sprintf("127.0.0.1:%d", redirectPort),
+		}
+	}
+	stopGrace := time.Duration(0)
+	if v := s.StopGraceSeconds; v != nil && *v > 0 {
+		stopGrace = time.Duration(*v) * time.Second
+	}
+	iptablesKeepBackoff := 0
+	if v := s.IptablesKeepWhenBackoffLtMs; v != nil {
+		iptablesKeepBackoff = *v
+	}
+	return supervisorWiring{
+		Ready: daemon.ReadyConfig{
+			TCPDials:     dials,
+			ClashAPIURL:  clashURL,
+			TotalTimeout: totalTimeout,
+			Interval:     interval,
+		},
+		BackoffMs:               s.CrashPostReadyBackoffMs,
+		IptablesKeepBackoffLtMs: iptablesKeepBackoff,
+		StopGrace:               stopGrace,
+	}
 }
 
 // buildStatusExtra produces the StatusExtra hook injected into APIDeps.
