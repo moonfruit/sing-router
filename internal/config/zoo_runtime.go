@@ -11,8 +11,8 @@ import (
 )
 
 // PreprocessZooFile 读取 <rundir>/var/zoo.raw.json，扫描 <rundir>/<configDir>
-// 下其它 *.json fragment 取得静态 outbound tag 与 rule_set 列表，运行 Preprocess，
-// 原子写入 <rundir>/<configDir>/zoo.json。
+// 下其它 *.json fragment 取得静态 outbound tag 列表（用于撞名拒绝），运行
+// Preprocess，原子写入 <rundir>/<configDir>/zoo.json。
 //
 // 缺失 zoo.raw.json 不视为错误：返回 (nil, nil)，调用方继续用种子 zoo.json。
 // 其它错误返回，由调用方决定 log + 继续 还是 fail。
@@ -26,14 +26,13 @@ func PreprocessZooFile(rundir, configDir string) (*PreprocessStats, error) {
 		return nil, fmt.Errorf("read %s: %w", rawPath, err)
 	}
 	cfgDir := filepath.Join(rundir, configDir)
-	tags, ruleSets, err := scanZooBuiltins(cfgDir)
+	tags, err := scanBuiltinOutboundTags(cfgDir)
 	if err != nil {
 		return nil, fmt.Errorf("scan fragments: %w", err)
 	}
 	res, err := Preprocess(PreprocessInput{
 		Raw:                 raw,
 		BuiltinOutboundTags: tags,
-		BuiltinRuleSetIndex: ruleSets,
 	})
 	if err != nil {
 		return nil, err
@@ -50,16 +49,15 @@ func PreprocessZooFile(rundir, configDir string) (*PreprocessStats, error) {
 	return &res.Stats, nil
 }
 
-// scanZooBuiltins 解析 configDir 下除 zoo.json 外的所有 *.json fragment，
-// 收集 outbounds[].tag 与 route.rule_set[]。无法解析的文件忽略（可能与 zoo
-// 无关），不影响后续。
-func scanZooBuiltins(configDir string) (tags []string, rules []RuleSetEntry, err error) {
+// scanBuiltinOutboundTags 解析 configDir 下除 zoo.json 外的所有 *.json fragment，
+// 收集 outbounds[].tag。无法解析的文件忽略（可能与 zoo 无关），不影响后续。
+func scanBuiltinOutboundTags(configDir string) (tags []string, err error) {
 	entries, err := os.ReadDir(configDir)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return nil, nil, nil
+			return nil, nil
 		}
-		return nil, nil, err
+		return nil, err
 	}
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") || e.Name() == "zoo.json" {
@@ -67,18 +65,12 @@ func scanZooBuiltins(configDir string) (tags []string, rules []RuleSetEntry, err
 		}
 		data, err := os.ReadFile(filepath.Join(configDir, e.Name()))
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 		var doc struct {
 			Outbounds []struct {
 				Tag string `json:"tag"`
 			} `json:"outbounds"`
-			Route struct {
-				RuleSet []struct {
-					Tag string `json:"tag"`
-					URL string `json:"url"`
-				} `json:"rule_set"`
-			} `json:"route"`
 		}
 		if err := json.Unmarshal(stripJSONCLineComments(data), &doc); err != nil {
 			continue
@@ -88,11 +80,8 @@ func scanZooBuiltins(configDir string) (tags []string, rules []RuleSetEntry, err
 				tags = append(tags, ob.Tag)
 			}
 		}
-		for _, rs := range doc.Route.RuleSet {
-			rules = append(rules, RuleSetEntry{Tag: rs.Tag, URL: rs.URL})
-		}
 	}
-	return tags, rules, nil
+	return tags, nil
 }
 
 // stripJSONCLineComments 删除"首个非空白字符是 //"的整行。仓库内 JSONC fragment

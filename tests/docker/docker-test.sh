@@ -29,7 +29,7 @@ cd "$(git rev-parse --show-toplevel)"
 
 IMAGE_TAG="${IMAGE_TAG:-sing-router-test:aarch64}"
 CONTAINER_NAME="${CONTAINER_NAME:-sr-test}"
-SECRETS_FILE="tests/docker/secrets.env"
+SECRETS_FILE="secrets/sing-router.env"
 
 step() { printf '\n=== %s ===\n' "$*"; }
 

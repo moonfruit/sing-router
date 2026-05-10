@@ -3,7 +3,6 @@ package daemon
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -28,9 +27,6 @@ type Options struct {
 	CheckConfig  func(context.Context) error
 	StatusExtra  func() map[string]any
 	ScriptByName func(name string) ([]byte, error)
-
-	// GiteeProxy 是 /api/v1/proxy/gitee/ 路由的 handler；为 nil 表示未配置 gitee。
-	GiteeProxy http.Handler
 
 	// Updater 与 Sync 控制 daemon 后台资源同步；任一为 nil 时不启动后台 loop。
 	Updater *syncpkg.Updater
@@ -60,7 +56,6 @@ func Run(ctx context.Context, opts Options) error {
 		StatusExtra:  opts.StatusExtra,
 		ScriptByName: opts.ScriptByName,
 		ShutdownHook: cancel,
-		GiteeProxy:   opts.GiteeProxy,
 	}
 	mux := NewMux(deps)
 

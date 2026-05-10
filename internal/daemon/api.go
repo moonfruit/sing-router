@@ -25,9 +25,6 @@ type APIDeps struct {
 	StatusExtra  func() map[string]any
 	ScriptByName func(name string) ([]byte, error)
 	ShutdownHook func() // 通常关 ctx 让 main 退出
-
-	// GiteeProxy 处理 /api/v1/proxy/gitee/{ref}/{path...}；为 nil 时该路由返回 503。
-	GiteeProxy http.Handler
 }
 
 // NewMux 注册所有端点到一个 http.ServeMux。
@@ -117,13 +114,6 @@ func NewMux(deps APIDeps) *http.ServeMux {
 		}
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		_, _ = w.Write(data)
-	})
-	mux.HandleFunc("/api/v1/proxy/gitee/", func(w http.ResponseWriter, r *http.Request) {
-		if deps.GiteeProxy == nil {
-			writeError(w, http.StatusServiceUnavailable, "gitee.proxy_disabled", "gitee proxy not configured (gitee.token missing?)", nil)
-			return
-		}
-		deps.GiteeProxy.ServeHTTP(w, r)
 	})
 	mux.HandleFunc("/api/v1/shutdown", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {

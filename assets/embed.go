@@ -7,7 +7,7 @@ import (
 	"io/fs"
 )
 
-//go:embed config.d.default daemon.toml.tmpl firmware initd shell var
+//go:embed config.d.default daemon.toml.tmpl firmware initd rules shell var
 var fsys embed.FS
 
 // FS 返回根 fs.FS，可被 install 模块用 fs.Sub 取子树。

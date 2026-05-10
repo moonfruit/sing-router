@@ -12,7 +12,7 @@ func fakeRawURL(ref, path string) string {
 	return "https://example.com/raw/" + ref + "/" + path + "?access_token=tok"
 }
 
-func TestEnsureRequiredRuleSets_WritesMissingTags(t *testing.T) {
+func TestEnsureRequiredRuleSets_RemoteWhenToken(t *testing.T) {
 	rd := t.TempDir()
 	cfgDir := filepath.Join(rd, "config.d")
 	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
@@ -22,7 +22,7 @@ func TestEnsureRequiredRuleSets_WritesMissingTags(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(cfgDir, "dns.json"), []byte(`{"route":{"rules":[{"rule_set":"GeoIP@CN"}]}}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	required := []RuleSetSource{{Tag: "GeoIP@CN", GiteePath: "rules/geoip-cn.srs"}}
+	required := []RuleSetSource{{Tag: "GeoIP@CN", GiteePath: "rules/geoip-cn.srs", LocalRelPath: "var/rules/geoip-cn.srs"}}
 	added, err := EnsureRequiredRuleSets(rd, "config.d", fakeRawURL, "main", required)
 	if err != nil {
 		t.Fatal(err)
@@ -43,6 +43,45 @@ func TestEnsureRequiredRuleSets_WritesMissingTags(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "access_token=tok") {
 		t.Errorf("rule-set.json missing token query:\n%s", data)
+	}
+	if !strings.Contains(string(data), `"type": "remote"`) {
+		t.Errorf("entry should be type:remote when rawURL provided:\n%s", data)
+	}
+}
+
+func TestEnsureRequiredRuleSets_LocalFallbackWhenNoToken(t *testing.T) {
+	rd := t.TempDir()
+	cfgDir := filepath.Join(rd, "config.d")
+	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	required := []RuleSetSource{
+		{Tag: "GeoIP@CN", GiteePath: "rules/geoip-cn.srs", LocalRelPath: "var/rules/geoip-cn.srs"},
+		{Tag: "Lan", GiteePath: "rules/lan.srs", LocalRelPath: "var/rules/lan.srs"},
+	}
+	added, err := EnsureRequiredRuleSets(rd, "config.d", nil, "main", required)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(added) != 2 {
+		t.Errorf("added = %v, want 2 entries", added)
+	}
+	data, err := os.ReadFile(filepath.Join(cfgDir, SupplementalRuleSetFile))
+	if err != nil {
+		t.Fatalf("rule-set.json missing: %v", err)
+	}
+	s := string(data)
+	if !strings.Contains(s, `"type": "local"`) {
+		t.Errorf("entry should be type:local when rawURL=nil:\n%s", s)
+	}
+	if !strings.Contains(s, `"path": "var/rules/geoip-cn.srs"`) {
+		t.Errorf("missing path for GeoIP@CN:\n%s", s)
+	}
+	if !strings.Contains(s, `"path": "var/rules/lan.srs"`) {
+		t.Errorf("missing path for Lan:\n%s", s)
+	}
+	if strings.Contains(s, "access_token") {
+		t.Errorf("local fallback must not embed any URL/token:\n%s", s)
 	}
 }
 
@@ -95,17 +134,20 @@ func TestEnsureRequiredRuleSets_RemovesStaleFragmentWhenAllProvided(t *testing.T
 	}
 }
 
-func TestEnsureRequiredRuleSets_NilRawURLIsNoOp(t *testing.T) {
+func TestEnsureRequiredRuleSets_EmptyRequiredIsNoOp(t *testing.T) {
 	rd := t.TempDir()
 	cfgDir := filepath.Join(rd, "config.d")
 	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	added, err := EnsureRequiredRuleSets(rd, "config.d", nil, "main", DefaultRequiredRuleSets)
+	added, err := EnsureRequiredRuleSets(rd, "config.d", fakeRawURL, "main", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(added) != 0 {
-		t.Errorf("added = %v, want empty (rawURL=nil)", added)
+		t.Errorf("added = %v, want empty", added)
+	}
+	if _, err := os.Stat(filepath.Join(cfgDir, SupplementalRuleSetFile)); !os.IsNotExist(err) {
+		t.Errorf("rule-set.json should not exist when required empty; err=%v", err)
 	}
 }

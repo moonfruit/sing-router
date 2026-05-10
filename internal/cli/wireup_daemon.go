@@ -3,7 +3,6 @@ package cli
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"os"
 	"path/filepath"
 	"time"
@@ -75,21 +74,28 @@ func realRunDaemon(ctx context.Context, rundir string) error {
 	}
 
 	// 静态 fragment（dns.json 等）引用了一些 rule_set tag 但不再自行声明；
-	// 若 zoo.json 也没补足，本步用真实 gitee URL（含 token）写一个补充 fragment。
-	// 没有 token 时跳过——daemon 下面会再次警告。
+	// EnsureRequiredRuleSets 一定会跑一次：
+	//   - 有 token → 写 remote entry（真实 gitee URL，自动跟随服务器更新）
+	//   - 无 token → 写 local entry，指向 install 阶段落到 var/rules/ 的内嵌兜底
+	var rawURL config.RawURLFunc
+	ref := cfg.Gitee.Zoo.Ref
+	if ref == "" {
+		ref = "main"
+	}
 	if cfg.Gitee.Token != "" {
 		gc := gitee.NewClient(cfg.Gitee)
-		ref := cfg.Gitee.Zoo.Ref
-		if ref == "" {
-			ref = "main"
+		rawURL = gc.RawURL
+	}
+	if added, err := config.EnsureRequiredRuleSets(rundir, cfg.Runtime.ConfigDir, rawURL, ref, config.DefaultRequiredRuleSets); err != nil {
+		em.Warn("config", "config.rule_sets.supplement.failed", "supplement rule_sets: {Err}", map[string]any{"Err": err.Error()})
+	} else if len(added) > 0 {
+		mode := "local"
+		if rawURL != nil {
+			mode = "remote"
 		}
-		if added, err := config.EnsureRequiredRuleSets(rundir, cfg.Runtime.ConfigDir, gc.RawURL, ref, config.DefaultRequiredRuleSets); err != nil {
-			em.Warn("config", "config.rule_sets.supplement.failed", "supplement rule_sets: {Err}", map[string]any{"Err": err.Error()})
-		} else if len(added) > 0 {
-			em.Info("config", "config.rule_sets.supplement.ok",
-				"supplemented {Count} rule_set tags via gitee: {Tags}",
-				map[string]any{"Count": len(added), "Tags": added})
-		}
+		em.Info("config", "config.rule_sets.supplement.ok",
+			"supplemented {Count} rule_set tags ({Mode}): {Tags}",
+			map[string]any{"Count": len(added), "Mode": mode, "Tags": added})
 	}
 
 	routing := config.LoadRouting(cfg)
@@ -138,19 +144,13 @@ func realRunDaemon(ctx context.Context, rundir string) error {
 		},
 	})
 
-	// Gitee 客户端（一份）：反向代理 handler 与 sync.Updater 共享同一实例。
-	// 缺少 token 时跳过反向代理与后台同步——仍允许 daemon 起动，便于排障。
-	var (
-		giteeProxy http.Handler
-		updater    *syncpkg.Updater
-	)
+	// Gitee 客户端：sync.Updater 用。缺少 token 时跳过后台同步——仍允许 daemon
+	// 起动，便于排障；rule_set 由 EnsureRequiredRuleSets 用嵌入兜底。
+	var updater *syncpkg.Updater
 	if cfg.Gitee.Token != "" {
-		gc := gitee.NewClient(cfg.Gitee)
-		gc.Retries = cfg.Download.HTTPRetries
-		giteeProxy = gc.NewProxyHandler()
 		updater = syncpkg.NewUpdater(cfg, rundir)
 	} else {
-		em.Warn("daemon", "gitee.disabled", "gitee.token empty; reverse proxy and background sync disabled", nil)
+		em.Warn("daemon", "gitee.disabled", "gitee.token empty; background sync disabled", nil)
 	}
 
 	return daemon.Run(ctx, daemon.Options{
@@ -161,7 +161,6 @@ func realRunDaemon(ctx context.Context, rundir string) error {
 		Bus:        stack.Bus,
 		LogFile:    logPath,
 		Supervisor: sup,
-		GiteeProxy: giteeProxy,
 		Updater:    updater,
 		Sync: daemon.SyncLoopConfig{
 			IntervalSec:     cfg.Sync.SyncIntervalSeconds(),

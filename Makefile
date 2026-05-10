@@ -7,7 +7,7 @@ CN_LIST_URL ?= https://cdn.jsdelivr.net/gh/juewuy/ShellCrash@update/bin/geodata/
 
 UPLOAD_DEST ?= /opt/sbin/sing-router
 
-.PHONY: build build-arm64 upload test cover fakebox update-cn docker-test
+.PHONY: build build-arm64 upload test cover fakebox update-cn update-rule-sets update-all docker-test
 
 build:
 	$(GO) build -trimpath -ldflags '$(LDFLAGS)' -o $(BIN) ./cmd/sing-router
@@ -32,15 +32,21 @@ docker-test:
 	@tests/docker/docker-test.sh
 
 update-cn:
-	@rm -f assets/var/cn.txt.new
-	@curl -fsSL --retry 3 \
-	    --etag-compare assets/var/cn.txt.etag \
-	    --etag-save    assets/var/cn.txt.etag \
-	    -o assets/var/cn.txt.new "$(CN_LIST_URL)"
-	@if [ -s assets/var/cn.txt.new ]; then \
-	    mv assets/var/cn.txt.new assets/var/cn.txt; \
-	    echo "assets/var/cn.txt updated ($$(wc -l < assets/var/cn.txt) lines)"; \
-	else \
-	    rm -f assets/var/cn.txt.new; \
-	    echo "assets/var/cn.txt already up to date (HTTP 304)"; \
-	fi
+	@scripts/fetch-asset.sh "$(CN_LIST_URL)" assets/var/cn.txt
+
+# 4 个 sing-box 内嵌 rule_set；token 从 sops 加密的 secrets 解出。
+RULE_SETS    ?= geoip-cn.srs geosites-cn.srs lan.srs fakeip-bypass.srs
+GITEE_OWNER  ?= moonfruit
+GITEE_REPO   ?= private
+GITEE_REF    ?= main
+
+update-rule-sets:
+	@token=$$(sops -d secrets/sing-router.env | grep '^SING_ROUTER_GITEE_TOKEN=' | cut -d= -f2-) && \
+	    if [ -z "$$token" ]; then echo "ERROR: SING_ROUTER_GITEE_TOKEN not in secrets/sing-router.env" >&2; exit 1; fi && \
+	    for f in $(RULE_SETS); do \
+	        url="https://gitee.com/api/v5/repos/$(GITEE_OWNER)/$(GITEE_REPO)/raw/rules/$$f?ref=$(GITEE_REF)&access_token=$$token"; \
+	        scripts/fetch-asset.sh "$$url" "assets/rules/$$f"; \
+	    done
+
+update-all: update-cn update-rule-sets
+	@echo "all embedded assets up to date"

@@ -29,7 +29,6 @@ var (
 type PreprocessStats struct {
 	OutboundCount             int      `json:"outbound_count"`
 	RuleSetCount              int      `json:"rule_set_count"`
-	RuleSetDedupDropped       int      `json:"rule_set_dedup_dropped"`
 	OutboundCollisionRejected bool     `json:"outbound_collision_rejected"`
 	DroppedFields             []string `json:"dropped_fields"`
 }
@@ -37,14 +36,7 @@ type PreprocessStats struct {
 // PreprocessInput 描述一次预处理的输入。
 type PreprocessInput struct {
 	Raw                 []byte
-	BuiltinRuleSetIndex []RuleSetEntry // 来自所有静态 fragment 的 route.rule_set
-	BuiltinOutboundTags []string       // 静态 outbounds.json 的 tag 列表（如 DIRECT、REJECT）
-}
-
-// RuleSetEntry 描述 rule_set 的最少字段（tag + url）；按 url 去重。
-type RuleSetEntry struct {
-	Tag string `json:"tag"`
-	URL string `json:"url,omitempty"`
+	BuiltinOutboundTags []string // 静态 outbounds.json 的 tag 列表（如 DIRECT、REJECT）
 }
 
 // PreprocessResult 是一次成功预处理的产出。
@@ -65,8 +57,10 @@ func (e *PreprocessError) Error() string {
 
 func (e *PreprocessError) Unwrap() error { return e.Err }
 
-// Preprocess 对 zoo.raw.json 的字节做白名单过滤、URL 去重、引用改写、撞名校验，
-// 返回最终可写入 config.d/zoo.json 的字节。
+// Preprocess 对 zoo.raw.json 的字节做白名单过滤、outbound 撞名校验，
+// 返回最终可写入 config.d/zoo.json 的字节。route.rule_set 直接透传——dns.json
+// 不再自带 rule_set 定义，rule_set 集合由用户 zoo + EnsureRequiredRuleSets 兜底，
+// 不在这里 dedup。
 func Preprocess(in PreprocessInput) (*PreprocessResult, error) {
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(in.Raw, &raw); err != nil {
@@ -133,57 +127,6 @@ func Preprocess(in PreprocessInput) (*PreprocessResult, error) {
 				}
 			}
 		}
-	}
-
-	// ---- dedup rule_set（builtin_wins）：URL 命中或 tag 命中都让 builtin 赢 ----
-	// URL 命中：rewriteMap 把用户 tag 改写为 builtin tag（不同名时引用更新）。
-	// Tag 命中（不同 URL）：直接 drop 用户条目；route.rules 里仍写同一个 tag，
-	// 由 builtin 的同名 rule_set 提供——避免 sing-box "duplicate rule-set tag"。
-	rewriteMap := map[string]string{} // zooTag -> builtinTag
-	var deduped []map[string]any
-	if len(ruleSetEntries) > 0 {
-		builtinByURL := map[string]string{}
-		builtinByTag := map[string]struct{}{}
-		for _, e := range in.BuiltinRuleSetIndex {
-			builtinByURL[e.URL] = e.Tag
-			builtinByTag[e.Tag] = struct{}{}
-		}
-		for _, entry := range ruleSetEntries {
-			url, _ := entry["url"].(string)
-			tag, _ := entry["tag"].(string)
-			if builtinTag, ok := builtinByURL[url]; ok && url != "" {
-				rewriteMap[tag] = builtinTag
-				stats.RuleSetDedupDropped++
-				continue
-			}
-			if _, hit := builtinByTag[tag]; hit {
-				// Tag 撞名（URL 不同）→ builtin 赢；用户引用同 tag 自然落到 builtin
-				stats.RuleSetDedupDropped++
-				continue
-			}
-			deduped = append(deduped, entry)
-		}
-		ruleSetEntries = deduped
-		stats.RuleSetCount = len(ruleSetEntries)
-	}
-
-	// ---- rewrite route.rules[*].rule_set 引用 ----
-	if route != nil && len(rewriteMap) > 0 && route[keyRouteRules] != nil {
-		var rules []map[string]any
-		if err := json.Unmarshal(route[keyRouteRules], &rules); err != nil {
-			return nil, &PreprocessError{Stage: "parse_route_rules", Err: err}
-		}
-		for _, r := range rules {
-			if v, ok := r["rule_set"].(string); ok {
-				if newTag, ok := rewriteMap[v]; ok {
-					r["rule_set"] = newTag
-				}
-			}
-		}
-		// 写回 route map（保持后续 renderZoo 一致）；
-		// rules 是从 json.Unmarshal 解出的 map[string]any，再 Marshal 不会失败。
-		b, _ := json.Marshal(rules)
-		route[keyRouteRules] = b
 	}
 
 	rendered, err := renderZoo(outbounds, ruleSetEntries, route)

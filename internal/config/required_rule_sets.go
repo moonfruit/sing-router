@@ -11,23 +11,24 @@ import (
 
 // RuleSetSource 描述一个静态 fragment 引用、但没有定义的 rule_set。
 // EnsureRequiredRuleSets 在用户 zoo.raw.json 也没声明该 tag 时按这个表生成
-// 一个补充 fragment。
+// 一个补充 fragment——优先用真实 gitee URL；token 缺失时退回 install 阶段
+// 落到 <rundir>/var/rules/ 的内嵌 srs 文件（local 类型）。
 type RuleSetSource struct {
-	Tag       string // sing-box rule_set tag（如 "GeoIP@CN"）
-	GiteePath string // gitee 仓库内路径（如 "rules/geoip-cn.srs"）
+	Tag          string // sing-box rule_set tag（如 "GeoIP@CN"）
+	GiteePath    string // gitee 仓库内路径（如 "rules/geoip-cn.srs"）
+	LocalRelPath string // 相对 rundir 的本地文件路径（如 "var/rules/geoip-cn.srs"）
 }
 
 // DefaultRequiredRuleSets 是当前嵌入的静态 fragment（dns.json 等）所引用、
-// 但不再自行声明的 rule_set 集合。仓库内路径基于约定：rules/{slug}.srs。
+// 但不再自行声明的 rule_set 集合。
 var DefaultRequiredRuleSets = []RuleSetSource{
-	{Tag: "GeoIP@CN", GiteePath: "rules/geoip-cn.srs"},
-	{Tag: "GeoSites@CN", GiteePath: "rules/geosites-cn.srs"},
-	{Tag: "Lan", GiteePath: "rules/lan.srs"},
-	{Tag: "FakeIpBypass", GiteePath: "rules/fakeip-bypass.srs"},
+	{Tag: "GeoIP@CN", GiteePath: "rules/geoip-cn.srs", LocalRelPath: "var/rules/geoip-cn.srs"},
+	{Tag: "GeoSites@CN", GiteePath: "rules/geosites-cn.srs", LocalRelPath: "var/rules/geosites-cn.srs"},
+	{Tag: "Lan", GiteePath: "rules/lan.srs", LocalRelPath: "var/rules/lan.srs"},
+	{Tag: "FakeIpBypass", GiteePath: "rules/fakeip-bypass.srs", LocalRelPath: "var/rules/fakeip-bypass.srs"},
 }
 
 // SupplementalRuleSetFile 是 EnsureRequiredRuleSets 自动生成的 fragment 文件名。
-// 这个名字稳定，便于排障 / 反复重写。
 const SupplementalRuleSetFile = "rule-set.json"
 
 // RawURLFunc 用闭包注入 URL 构造逻辑，避免 internal/config 反向依赖 internal/gitee。
@@ -36,17 +37,20 @@ type RawURLFunc func(ref, path string) string
 
 // EnsureRequiredRuleSets 检查 configDir 下的 fragment（含 PreprocessZooFile
 // 写好的 zoo.json）已经声明了哪些 rule_set tag，凡是 required 中缺失的，写入
-// <configDir>/rule-set.json。每条 entry 的 url 由 rawURL(ref, path) 生成——
-// 真实 gitee URL，无需走本地反向代理（不需要 sing-box 启动早于 daemon proxy）。
+// <configDir>/rule-set.json。
 //
-//   - rawURL == nil 或 required 为空：删除可能残留的 rule-set.json，返回 nil。
-//   - 全部 required 已被覆盖：删除残留 rule-set.json，返回 nil。
-//   - 否则：原子写 rule-set.json，返回补充进去的 tag 列表。
+// 选择策略（per missing tag）：
+//   - rawURL != nil && ref != ""：写 remote 类型，URL 来自 rawURL(ref, GiteePath)
+//   - 否则：写 local 类型，path = LocalRelPath（相对 rundir，sing-box 在
+//     run -D <rundir> 下解析）。前提是 install 阶段已把 srs 文件落到 var/rules/。
+//
+// 全部 required 都已覆盖：删除残留 rule-set.json，返回 nil。
+// required 为空：同上，删 + 返 nil。
 func EnsureRequiredRuleSets(rundir, configDir string, rawURL RawURLFunc, ref string, required []RuleSetSource) ([]string, error) {
 	cfgDir := filepath.Join(rundir, configDir)
 	rsPath := filepath.Join(cfgDir, SupplementalRuleSetFile)
 
-	if rawURL == nil || len(required) == 0 {
+	if len(required) == 0 {
 		_ = os.Remove(rsPath)
 		return nil, nil
 	}
@@ -64,14 +68,20 @@ func EnsureRequiredRuleSets(rundir, configDir string, rawURL RawURLFunc, ref str
 		_ = os.Remove(rsPath)
 		return nil, nil
 	}
+	useRemote := rawURL != nil && ref != ""
+
 	var supplemented []string
 	var entries []map[string]any
 	for _, r := range missing {
-		entries = append(entries, map[string]any{
-			"type": "remote",
-			"tag":  r.Tag,
-			"url":  rawURL(ref, r.GiteePath),
-		})
+		entry := map[string]any{"tag": r.Tag}
+		if useRemote {
+			entry["type"] = "remote"
+			entry["url"] = rawURL(ref, r.GiteePath)
+		} else {
+			entry["type"] = "local"
+			entry["path"] = r.LocalRelPath
+		}
+		entries = append(entries, entry)
 		supplemented = append(supplemented, r.Tag)
 	}
 	out := map[string]any{

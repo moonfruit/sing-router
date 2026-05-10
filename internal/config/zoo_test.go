@@ -75,9 +75,9 @@ func TestPreprocessKeepsOnlyWhitelistedKeys(t *testing.T) {
 	}
 }
 
-// ---- Task 20: dedup by URL ----
+// ---- rule_set 透传：M5.2 起 dedup 已删除，rule_set 不再被 Preprocess 改写 ----
 
-func TestPreprocessDedupRuleSetByURL(t *testing.T) {
+func TestPreprocessPassesThroughRuleSet(t *testing.T) {
 	in := PreprocessInput{
 		Raw: zoo(t, map[string]any{
 			"outbounds": []any{},
@@ -85,68 +85,32 @@ func TestPreprocessDedupRuleSetByURL(t *testing.T) {
 				"rule_set": []any{
 					map[string]any{"tag": "geosites-cn", "url": "https://x/geosites-cn.srs"},
 					map[string]any{"tag": "lan", "url": "https://x/lan.srs"},
-					map[string]any{"tag": "extra", "url": "https://x/extra.srs"},
-				},
-				"rules": []any{},
-			},
-		}),
-		BuiltinRuleSetIndex: []RuleSetEntry{
-			{Tag: "GeoSites@CN", URL: "https://x/geosites-cn.srs"},
-			{Tag: "Lan", URL: "https://x/lan.srs"},
-		},
-	}
-	res, err := Preprocess(in)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if res.Stats.RuleSetDedupDropped != 2 {
-		t.Fatalf("expected 2 dropped, got %d", res.Stats.RuleSetDedupDropped)
-	}
-	if res.Stats.RuleSetCount != 1 {
-		t.Fatalf("expected 1 remaining, got %d", res.Stats.RuleSetCount)
-	}
-	rendered := mustParse(t, res.Rendered)
-	rs := rendered["route"].(map[string]any)["rule_set"].([]any)
-	if len(rs) != 1 || rs[0].(map[string]any)["tag"] != "extra" {
-		t.Fatalf("unexpected remaining rule_set: %#v", rs)
-	}
-}
-
-// ---- Task 21: rewrite references ----
-
-func TestPreprocessRewritesRouteRulesRefsToBuiltinTags(t *testing.T) {
-	in := PreprocessInput{
-		Raw: zoo(t, map[string]any{
-			"outbounds": []any{},
-			"route": map[string]any{
-				"rule_set": []any{
-					map[string]any{"tag": "geosites-cn", "url": "https://x/geosites-cn.srs"},
 				},
 				"rules": []any{
 					map[string]any{"rule_set": "geosites-cn", "outbound": "DIRECT"},
-					map[string]any{"rule_set": "extra", "outbound": "proxy"},
 				},
 			},
 		}),
-		BuiltinRuleSetIndex: []RuleSetEntry{
-			{Tag: "GeoSites@CN", URL: "https://x/geosites-cn.srs"},
-		},
 	}
 	res, err := Preprocess(in)
 	if err != nil {
 		t.Fatal(err)
 	}
-	rendered := mustParse(t, res.Rendered)
-	rules := rendered["route"].(map[string]any)["rules"].([]any)
-	if rules[0].(map[string]any)["rule_set"] != "GeoSites@CN" {
-		t.Fatalf("rewrite failed: %#v", rules[0])
+	if res.Stats.RuleSetCount != 2 {
+		t.Fatalf("expected 2 rule_set entries kept verbatim, got %d", res.Stats.RuleSetCount)
 	}
-	if rules[1].(map[string]any)["rule_set"] != "extra" {
-		t.Fatalf("non-deduped rule_set should remain unchanged: %#v", rules[1])
+	rendered := mustParse(t, res.Rendered)
+	rs := rendered["route"].(map[string]any)["rule_set"].([]any)
+	if len(rs) != 2 {
+		t.Fatalf("rule_set length: got %d want 2", len(rs))
+	}
+	rules := rendered["route"].(map[string]any)["rules"].([]any)
+	if rules[0].(map[string]any)["rule_set"] != "geosites-cn" {
+		t.Fatalf("route.rules[0].rule_set should not be rewritten: %#v", rules[0])
 	}
 }
 
-// ---- Task 22: outbound collision ----
+// ---- outbound collision ----
 
 func TestPreprocessRejectsOutboundTagCollision(t *testing.T) {
 	in := PreprocessInput{
@@ -171,7 +135,7 @@ func TestPreprocessRejectsOutboundTagCollision(t *testing.T) {
 	}
 }
 
-// ---- 集成：综合场景 ----
+// ---- 集成：综合场景（白名单过滤 + 撞名拒绝 + rule_set 透传） ----
 
 func TestPreprocessIntegrationWalkAll(t *testing.T) {
 	in := PreprocessInput{
@@ -193,9 +157,6 @@ func TestPreprocessIntegrationWalkAll(t *testing.T) {
 				"final": "jp",
 			},
 		}),
-		BuiltinRuleSetIndex: []RuleSetEntry{
-			{Tag: "GeoSites@CN", URL: "https://x/geosites-cn.srs"},
-		},
 		BuiltinOutboundTags: []string{"DIRECT", "REJECT"},
 	}
 	res, err := Preprocess(in)
@@ -205,14 +166,10 @@ func TestPreprocessIntegrationWalkAll(t *testing.T) {
 	if !contains(res.Stats.DroppedFields, "log") {
 		t.Fatal("log should be marked dropped")
 	}
-	if res.Stats.OutboundCount != 2 || res.Stats.RuleSetCount != 1 || res.Stats.RuleSetDedupDropped != 1 {
+	if res.Stats.OutboundCount != 2 || res.Stats.RuleSetCount != 2 {
 		t.Fatalf("stats wrong: %+v", res.Stats)
 	}
 	rendered := mustParse(t, res.Rendered)
-	rules := rendered["route"].(map[string]any)["rules"].([]any)
-	if rules[0].(map[string]any)["rule_set"] != "GeoSites@CN" {
-		t.Fatal("rewrite failed in integration")
-	}
 	if rendered["route"].(map[string]any)["final"] != "jp" {
 		t.Fatal("final preserved")
 	}
@@ -283,32 +240,7 @@ func TestPreprocessErrorStages(t *testing.T) {
 	}
 }
 
-// rules 不是数组 + rewriteMap 已填充 → 走 parse_route_rules 路径
-func TestPreprocessParseRouteRulesError(t *testing.T) {
-	in := PreprocessInput{
-		Raw: zoo(t, map[string]any{
-			"route": map[string]any{
-				"rule_set": []any{
-					map[string]any{"tag": "geosites-cn", "url": "https://x/geosites-cn.srs"},
-				},
-				"rules": "not-an-array",
-			},
-		}),
-		BuiltinRuleSetIndex: []RuleSetEntry{
-			{Tag: "GeoSites@CN", URL: "https://x/geosites-cn.srs"},
-		},
-	}
-	_, err := Preprocess(in)
-	if err == nil {
-		t.Fatal("expected error")
-	}
-	var pe *PreprocessError
-	if !errors.As(err, &pe) || pe.Stage != "parse_route_rules" {
-		t.Fatalf("stage: %v", err)
-	}
-}
-
-// rules 不是数组 + rewriteMap 为空 → renderZoo 失败 → 包装为 render
+// rules 不是数组 → renderZoo 解 rules 时失败 → 包装为 render
 func TestPreprocessRenderError(t *testing.T) {
 	in := PreprocessInput{
 		Raw: zoo(t, map[string]any{

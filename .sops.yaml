@@ -1,4 +1,4 @@
 creation_rules:
-  - path_regex: ^tests/docker/secrets\.env$
+  - path_regex: (?:^|/)secrets/.*\.env$
     age: >-
       ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAILjSU8sPr3D/6tUXRl0VqIg4Nc1DGxb/yRnS8zoa8Rax moon@Moons-MacBook.local

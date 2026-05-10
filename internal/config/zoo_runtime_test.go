@@ -119,9 +119,9 @@ func TestPreprocessZooFile_BuiltinOutboundCollisionRejected(t *testing.T) {
 	}
 }
 
-func TestScanZooBuiltins_PicksUpStaticFragments(t *testing.T) {
+func TestScanBuiltinOutboundTags_PicksUpStaticFragments(t *testing.T) {
 	rd := writeRundir(t)
-	tags, rules, err := scanZooBuiltins(filepath.Join(rd, "config.d"))
+	tags, err := scanBuiltinOutboundTags(filepath.Join(rd, "config.d"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,14 +135,11 @@ func TestScanZooBuiltins_PicksUpStaticFragments(t *testing.T) {
 			t.Errorf("missing builtin tag %q in scanned %v", k, tags)
 		}
 	}
-	if len(rules) != 1 || rules[0].Tag != "GeoIP@CN" {
-		t.Errorf("rules = %+v; want one entry with tag GeoIP@CN", rules)
-	}
 }
 
-func TestPreprocessZooFile_TagCollisionDroppedByBuiltinWins(t *testing.T) {
+func TestPreprocessZooFile_RuleSetPassedThrough(t *testing.T) {
 	rd := writeRundir(t)
-	// 用户 zoo 含与静态 dns.json 同名的 GeoIP@CN，但 URL 不同
+	// 用户 zoo 含 rule_set；M5.2 起 Preprocess 不再 dedup，原样保留进 zoo.json
 	colliding := `{
       "outbounds": [{"type": "direct", "tag": "Custom"}],
       "route": {
@@ -160,18 +157,18 @@ func TestPreprocessZooFile_TagCollisionDroppedByBuiltinWins(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PreprocessZooFile: %v", err)
 	}
-	if stats.RuleSetDedupDropped != 1 {
-		t.Errorf("RuleSetDedupDropped = %d, want 1 (GeoIP@CN dropped)", stats.RuleSetDedupDropped)
+	if stats.RuleSetCount != 2 {
+		t.Errorf("RuleSetCount = %d, want 2 (both kept verbatim)", stats.RuleSetCount)
 	}
 	data, err := os.ReadFile(filepath.Join(rd, "config.d", "zoo.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(data), "other.host") {
-		t.Errorf("user's GeoIP@CN URL should be dropped (builtin wins); got:\n%s", data)
+	if !strings.Contains(string(data), "other.host") {
+		t.Errorf("user's GeoIP@CN URL must be preserved; got:\n%s", data)
 	}
 	if !strings.Contains(string(data), "MyOwn") {
-		t.Errorf("non-colliding rule-set MyOwn should be kept; got:\n%s", data)
+		t.Errorf("MyOwn should be kept; got:\n%s", data)
 	}
 }
 
