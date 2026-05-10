@@ -110,7 +110,7 @@ func realRunDaemon(ctx context.Context, rundir string) error {
 	startup := assets.MustReadFile("shell/startup.sh")
 	teardown := assets.MustReadFile("shell/teardown.sh")
 
-	wiring := buildSupervisorWiring(cfg.Supervisor, routing.DnsPort, routing.RedirectPort)
+	wiring := buildSupervisorWiring(cfg.Supervisor)
 
 	sup := daemon.New(daemon.SupervisorConfig{
 		Emitter:                 em,
@@ -194,10 +194,24 @@ type supervisorWiring struct {
 	StopGrace               time.Duration
 }
 
+// readyCheckDialMixedPort 是 ready check 默认要 dial 的本机端口。
+//
+// 必须与 assets/config.d.default/inbounds.json 中 mixed-in 的 listen_port 保持一致；
+// 改 inbounds.json 时同步改这里（或反过来）。
+//
+// 为什么不 dial dns-in (1053) / redirect-in (7892)：那两个 inbound 是 transparent
+// 重定向类型（dns-in 是 type=direct，redirect-in 是 type=redirect），本机自连时
+// SO_ORIGINAL_DST 取到的目标就是 sing-box 自己的 listen 地址，sing-box 会按 route
+// 规则把这个连接当成"用户要去 127.0.0.1:port"，命中 ip_is_private→DIRECT，
+// outbound 又去 dial 同一个端口被自己接住，无限自繁殖 → CPU 100%。mixed-in 是
+// 真正的协议入站（HTTP/SOCKS），裸 TCP dial 不发握手会在握手前被关掉，根本不
+// 进路由阶段，不会回环。
+const readyCheckDialMixedPort = 7890
+
 // buildSupervisorWiring 把 daemon.toml [supervisor] 节翻译成 supervisor 运行参数。
 // 默认 ready check 总超时 60s（容纳 sing-box 冷启：cache-file 加载 + rule-set
 // 下载 + router 启动），用户可在 daemon.toml 覆盖。
-func buildSupervisorWiring(s config.SupervisorConfig, dnsPort, redirectPort int) supervisorWiring {
+func buildSupervisorWiring(s config.SupervisorConfig) supervisorWiring {
 	totalTimeout := 60 * time.Second
 	if v := s.ReadyCheckTimeoutMs; v != nil && *v > 0 {
 		totalTimeout = time.Duration(*v) * time.Millisecond
@@ -212,10 +226,7 @@ func buildSupervisorWiring(s config.SupervisorConfig, dnsPort, redirectPort int)
 	}
 	var dials []string
 	if v := s.ReadyCheckDialInbounds; v == nil || *v {
-		dials = []string{
-			fmt.Sprintf("127.0.0.1:%d", dnsPort),
-			fmt.Sprintf("127.0.0.1:%d", redirectPort),
-		}
+		dials = []string{fmt.Sprintf("127.0.0.1:%d", readyCheckDialMixedPort)}
 	}
 	stopGrace := time.Duration(0)
 	if v := s.StopGraceSeconds; v != nil && *v > 0 {

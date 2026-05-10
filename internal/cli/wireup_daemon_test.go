@@ -33,8 +33,12 @@ func TestBuildStatusExtraEmptyFirmwareReportsUnknown(t *testing.T) {
 // 回归保护：sing-box 冷启动（cache-file 加载 ~2s + rule-set 下载 ~2s + router
 // 启动 ~2s）实测要 4-6 秒；任何把内置默认 TotalTimeout 改回小常量的回归会被
 // 这条用例拍下。
+//
+// 同时锁住 ready dial 端口列表：默认只 dial mixed-in (7890)。绝不能再回到
+// dial dns-in (1053) / redirect-in (7892) —— 那两个是 transparent 入站，本机
+// 自连即触发 sing-box 自身回环（CPU 100%），见 readyCheckDialMixedPort 注释。
 func TestBuildSupervisorWiring_Defaults(t *testing.T) {
-	w := buildSupervisorWiring(config.SupervisorConfig{}, 1053, 7892)
+	w := buildSupervisorWiring(config.SupervisorConfig{})
 
 	if got, want := w.Ready.TotalTimeout, 60*time.Second; got != want {
 		t.Fatalf("default TotalTimeout = %v, want %v", got, want)
@@ -45,9 +49,14 @@ func TestBuildSupervisorWiring_Defaults(t *testing.T) {
 	if w.Ready.ClashAPIURL != "http://127.0.0.1:9999/version" {
 		t.Fatalf("default ClashAPIURL = %q", w.Ready.ClashAPIURL)
 	}
-	wantDials := []string{"127.0.0.1:1053", "127.0.0.1:7892"}
-	if len(w.Ready.TCPDials) != 2 || w.Ready.TCPDials[0] != wantDials[0] || w.Ready.TCPDials[1] != wantDials[1] {
+	wantDials := []string{"127.0.0.1:7890"}
+	if len(w.Ready.TCPDials) != 1 || w.Ready.TCPDials[0] != wantDials[0] {
 		t.Fatalf("default TCPDials = %v, want %v", w.Ready.TCPDials, wantDials)
+	}
+	for _, d := range w.Ready.TCPDials {
+		if d == "127.0.0.1:1053" || d == "127.0.0.1:7892" {
+			t.Fatalf("TCPDials must NOT include transparent inbound %q (会触发 sing-box 自身回环)", d)
+		}
 	}
 	if w.StopGrace != 0 {
 		t.Fatalf("default StopGrace should be 0 (supervisor.New 内部填默认), got %v", w.StopGrace)
@@ -72,7 +81,7 @@ func TestBuildSupervisorWiring_TomlOverrides(t *testing.T) {
 		StopGraceSeconds:            &stopSec,
 		IptablesKeepWhenBackoffLtMs: &keepBackoff,
 		CrashPostReadyBackoffMs:     backoffSeq,
-	}, 1053, 7892)
+	})
 
 	if w.Ready.TotalTimeout != 30*time.Second {
 		t.Fatalf("TotalTimeout = %v", w.Ready.TotalTimeout)
@@ -100,7 +109,7 @@ func TestBuildSupervisorWiring_TomlOverrides(t *testing.T) {
 // ReadyCheckTimeoutMs = 0（显式 0）应被视作"未提供"，回退到 60s 默认；不能 0 = 立刻超时。
 func TestBuildSupervisorWiring_TimeoutZeroFallsBackToDefault(t *testing.T) {
 	zero := 0
-	w := buildSupervisorWiring(config.SupervisorConfig{ReadyCheckTimeoutMs: &zero}, 1053, 7892)
+	w := buildSupervisorWiring(config.SupervisorConfig{ReadyCheckTimeoutMs: &zero})
 	if w.Ready.TotalTimeout != 60*time.Second {
 		t.Fatalf("zero should fall back to 60s default, got %v", w.Ready.TotalTimeout)
 	}

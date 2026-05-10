@@ -22,6 +22,9 @@ disable_color   = false
 include_stack   = false
 
 [supervisor]
+# ready_check_dial_inbounds = true 时，daemon 只 dial mixed-in (127.0.0.1:7890)
+# 探活；绝不 dial dns-in (1053) / redirect-in (7892)——那两个是 transparent
+# 入站，本机自连即触发 sing-box 自身回环（CPU 100%）。
 # ready_check_dial_inbounds       = true
 # ready_check_clash_api           = true
 # ready_check_timeout_ms          = 60000

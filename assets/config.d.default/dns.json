@@ -50,6 +50,12 @@
       { "action": "sniff" },
       { "protocol": "dns", "action": "hijack-dns" },
       { "protocol": ["bittorrent", "ntp", "stun"], "outbound": "DIRECT" },
+      // 防自连回环：本机进程 dial 到 sing-box 自身的 dns-in (1053, type=direct)
+      // 或 redirect-in (7892, type=redirect) 时，SO_ORIGINAL_DST 拿到的目标即
+      // 127.0.0.1:listen_port，会一路掉到下面 ip_is_private→DIRECT，DIRECT 再去
+      // dial 同一个端口被自己接住，无限自繁殖。真正的 DNS 协议字节已被上面
+      // hijack-dns 接走；NAT REDIRECT 进来的合法流量 dst 是公网 IP，不命中此条。
+      { "ip_cidr": ["127.0.0.0/8", "::1/128"], "port": [1053, 7892], "action": "reject" },
       { "ip_is_private": true, "outbound": "DIRECT" },
       { "action": "sniff-override-destination" }
     ],
