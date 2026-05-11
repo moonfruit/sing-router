@@ -109,6 +109,7 @@ func realRunDaemon(ctx context.Context, rundir string) error {
 	}
 	startup := assets.MustReadFile("shell/startup.sh")
 	teardown := assets.MustReadFile("shell/teardown.sh")
+	reloadCNIpsetScript := assets.MustReadFile("shell/reload-cn-ipset.sh")
 
 	wiring := buildSupervisorWiring(cfg.Supervisor)
 
@@ -150,6 +151,54 @@ func realRunDaemon(ctx context.Context, rundir string) error {
 		em.Warn("daemon", "gitee.disabled", "gitee.token empty; background sync disabled", nil)
 	}
 
+	checkConfig := func(ctx context.Context) error {
+		return config.CheckSingBoxConfig(ctx,
+			filepath.Join(rundir, cfg.Runtime.SingBoxBinary),
+			filepath.Join(rundir, cfg.Runtime.ConfigDir))
+	}
+	reloadCNIpset := func(ctx context.Context) error {
+		em.Info("shell", "shell.reload_cn_ipset.exec", "running reload-cn-ipset.sh", nil)
+		if err := runner.Run(ctx, string(reloadCNIpsetScript), nil); err != nil {
+			em.Warn("shell", "shell.reload_cn_ipset.failed",
+				"reload-cn-ipset failed: {Err}", map[string]any{"Err": err.Error()})
+			return err
+		}
+		em.Info("shell", "shell.reload_cn_ipset.completed", "cn ipset reloaded", nil)
+		return nil
+	}
+
+	// Applier 把 sync 拉到的资源真正应用到运行中的 sing-box。仅在有 updater 时构建。
+	var applier *daemon.Applier
+	if updater != nil {
+		ref := cfg.Gitee.Zoo.Ref
+		if ref == "" {
+			ref = "main"
+		}
+		var rawURL config.RawURLFunc
+		if cfg.Gitee.Token != "" {
+			gc := gitee.NewClient(cfg.Gitee)
+			rawURL = gc.RawURL
+		}
+		applier = &daemon.Applier{
+			Rundir:        rundir,
+			ConfigDir:     cfg.Runtime.ConfigDir,
+			Emitter:       em,
+			Restart:       sup.Restart,
+			Recover:       sup.RecoverFromFailedApply,
+			CheckConfig:   checkConfig,
+			ReloadCNIpset: reloadCNIpset,
+			PreprocessZoo: func() error {
+				if _, err := config.PreprocessZooFile(rundir, cfg.Runtime.ConfigDir); err != nil {
+					return err
+				}
+				if _, err := config.EnsureRequiredRuleSets(rundir, cfg.Runtime.ConfigDir, rawURL, ref, config.DefaultRequiredRuleSets); err != nil {
+					return err
+				}
+				return nil
+			},
+		}
+	}
+
 	return daemon.Run(ctx, daemon.Options{
 		Rundir:     rundir,
 		Listen:     cfg.HTTP.Listen,
@@ -159,9 +208,11 @@ func realRunDaemon(ctx context.Context, rundir string) error {
 		LogFile:    logPath,
 		Supervisor: sup,
 		Updater:    updater,
+		Applier:    applier,
 		Sync: daemon.SyncLoopConfig{
 			IntervalSec:     cfg.Sync.SyncIntervalSeconds(),
 			OnStartDelaySec: cfg.Sync.SyncOnStartDelaySec(),
+			AutoApply:       cfg.Sync.SyncAutoApply(),
 		},
 		ReapplyRules: func(ctx context.Context) error {
 			if err := runner.Run(ctx, string(teardown), nil); err != nil {
@@ -169,12 +220,9 @@ func realRunDaemon(ctx context.Context, rundir string) error {
 			}
 			return runner.Run(ctx, string(startup), nil)
 		},
-		CheckConfig: func(ctx context.Context) error {
-			return config.CheckSingBoxConfig(ctx,
-				filepath.Join(rundir, cfg.Runtime.SingBoxBinary),
-				filepath.Join(rundir, cfg.Runtime.ConfigDir))
-		},
-		StatusExtra: buildStatusExtra(rundir, cfg.Runtime.ConfigDir, cfg.Install.Firmware),
+		CheckConfig:   checkConfig,
+		ReloadCNIpset: reloadCNIpset,
+		StatusExtra:   buildStatusExtra(rundir, cfg.Runtime.ConfigDir, cfg.Install.Firmware),
 		ScriptByName: func(name string) ([]byte, error) {
 			path, ok := scriptMap[name]
 			if !ok {

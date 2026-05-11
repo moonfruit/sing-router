@@ -13,11 +13,17 @@ import (
 	syncpkg "github.com/moonfruit/sing-router/internal/sync"
 )
 
-// newUpdateCmd 提供 `sing-router update [sing-box|cn|zoo|all]`：从 gitee/公网拉
-// 最新资源到 rundir。CLI 内部直接调 sync 包，不经 daemon HTTP API（同步是 IO
-// 密集且独立于 sing-box 主进程的工作，无需通过 daemon 中转）。
+// newUpdateCmd 提供 `sing-router update [sing-box|cn|zoo|all] [--apply]`:
+// 从 gitee/公网拉最新资源到 rundir。默认仅下载,保留手动节奏(用户自己调
+// `restart` / `reload-cn-ipset` / `apply`);加 --apply 时下载完直接 POST
+// /api/v1/apply 让 daemon 走 Applier 流程把变化落地(需要 daemon 在跑)。
+//
+// 对于 sing-box,--apply 路径不在 CLI 里 rename staging,而是把 bin/sing-box.new
+// 留给 daemon 端 Applier 做 backup+rename(确保 restart 失败可 revert)。
+// 默认路径仍走 UpdateSingBox 内部 rename 以保持向后兼容。
 func newUpdateCmd() *cobra.Command {
 	var rundir string
+	var apply bool
 	cmd := &cobra.Command{
 		Use:   "update [sing-box|cn|zoo|all]",
 		Short: "Pull latest sing-box / cn.txt / zoo.json from gitee (and public CDN for cn.txt)",
@@ -42,19 +48,37 @@ func newUpdateCmd() *cobra.Command {
 			u := syncpkg.NewUpdater(cfg, rundir)
 
 			out := cmd.OutOrStdout()
+			var anyChanged bool
 			switch target {
 			case "sing-box":
-				changed, version, err := u.UpdateSingBox(ctx)
-				printItem(out, "sing-box", changed, version, err)
-				return err
+				if apply {
+					_, changed, version, err := u.UpdateSingBoxStaging(ctx)
+					printItem(out, "sing-box", changed, version, err)
+					if err != nil {
+						return err
+					}
+					anyChanged = changed
+				} else {
+					changed, version, err := u.UpdateSingBox(ctx)
+					printItem(out, "sing-box", changed, version, err)
+					if err != nil {
+						return err
+					}
+				}
 			case "cn":
 				changed, err := u.UpdateCNList(ctx)
 				printItem(out, "cn.txt", changed, "", err)
-				return err
+				if err != nil {
+					return err
+				}
+				anyChanged = changed
 			case "zoo":
 				changed, err := u.UpdateZoo(ctx)
 				printItem(out, "zoo.json", changed, "", err)
-				return err
+				if err != nil {
+					return err
+				}
+				anyChanged = changed
 			case "all":
 				r := u.UpdateAll(ctx)
 				printItem(out, "sing-box", r.SingBox.Changed, r.SingBox.Version, r.SingBox.Err)
@@ -63,13 +87,37 @@ func newUpdateCmd() *cobra.Command {
 				if r.HasError() {
 					return fmt.Errorf("one or more resources failed to update")
 				}
-				return nil
+				if !apply && r.SingBox.Changed {
+					// 默认路径需要把 sing-box staging 落到正式位置(与改造前一致)。
+					if err := u.CommitSingBoxStaging(); err != nil {
+						return fmt.Errorf("commit sing-box staging: %w", err)
+					}
+				}
+				anyChanged = r.SingBox.Changed || r.CNList.Changed || r.Zoo.Changed
 			default:
 				return fmt.Errorf("unknown target %q (want sing-box | cn | zoo | all)", target)
 			}
+
+			if !apply {
+				return nil
+			}
+			if !anyChanged {
+				fmt.Fprintln(out, "ℹ --apply: nothing changed; daemon untouched")
+				return nil
+			}
+			client := NewHTTPClient(getDaemonBase(cmd))
+			if err := client.PostJSON("/api/v1/apply", nil, nil); err != nil {
+				if IsDaemonNotRunning(err) {
+					return fmt.Errorf("--apply requires the daemon to be running; start it first")
+				}
+				return fmt.Errorf("POST /api/v1/apply: %w", err)
+			}
+			fmt.Fprintln(out, "✓ apply: triggered daemon-side apply (see daemon logs for outcome)")
+			return nil
 		},
 	}
 	cmd.Flags().StringVarP(&rundir, "rundir", "D", "", "Runtime root directory (default /opt/home/sing-router)")
+	cmd.Flags().BoolVar(&apply, "apply", false, "After download, POST /api/v1/apply so daemon applies the changes (restart sing-box / reload ipset). Default: download only.")
 	return cmd
 }
 

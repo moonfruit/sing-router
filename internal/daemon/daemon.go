@@ -16,21 +16,24 @@ import (
 
 // Options 是 daemon 入口接受的参数。
 type Options struct {
-	Rundir       string
-	Listen       string
-	Version      string
-	Emitter      *clef.Emitter
-	Bus          *clef.Bus // 给 /api/v1/logs?follow=true 的 SSE 订阅
-	LogFile      string    // sing-router.log 绝对路径；给 /api/v1/logs 历史 tail
-	Supervisor   *Supervisor
-	ReapplyRules func(context.Context) error
-	CheckConfig  func(context.Context) error
-	StatusExtra  func() map[string]any
-	ScriptByName func(name string) ([]byte, error)
+	Rundir        string
+	Listen        string
+	Version       string
+	Emitter       *clef.Emitter
+	Bus           *clef.Bus // 给 /api/v1/logs?follow=true 的 SSE 订阅
+	LogFile       string    // sing-router.log 绝对路径；给 /api/v1/logs 历史 tail
+	Supervisor    *Supervisor
+	ReapplyRules  func(context.Context) error
+	CheckConfig   func(context.Context) error
+	ReloadCNIpset func(context.Context) error // 仅重建 cn ipset 不动 iptables 规则
+	StatusExtra   func() map[string]any
+	ScriptByName  func(name string) ([]byte, error)
 
-	// Updater 与 Sync 控制 daemon 后台资源同步；任一为 nil 时不启动后台 loop。
+	// Updater 与 Sync 控制 daemon 后台资源同步；Updater 为 nil 时不启动后台 loop。
+	// Applier 为 nil 时即使 Sync.AutoApply=true 也只做日志(不会真 apply)。
 	Updater *syncpkg.Updater
 	Sync    SyncLoopConfig
+	Applier *Applier
 }
 
 // Run 阻塞跑 daemon：HTTP listener + supervisor 主循环 + signal handling。
@@ -44,24 +47,28 @@ func Run(ctx context.Context, opts Options) error {
 	defer cancel()
 
 	deps := APIDeps{
-		Supervisor:   opts.Supervisor,
-		Emitter:      opts.Emitter,
-		Bus:          opts.Bus,
-		Version:      opts.Version,
-		Rundir:       opts.Rundir,
-		LogFile:      opts.LogFile,
-		Ctx:          ctx,
-		ReapplyRules: opts.ReapplyRules,
-		CheckConfig:  opts.CheckConfig,
-		StatusExtra:  opts.StatusExtra,
-		ScriptByName: opts.ScriptByName,
-		ShutdownHook: cancel,
+		Supervisor:    opts.Supervisor,
+		Emitter:       opts.Emitter,
+		Bus:           opts.Bus,
+		Version:       opts.Version,
+		Rundir:        opts.Rundir,
+		LogFile:       opts.LogFile,
+		Ctx:           ctx,
+		ReapplyRules:  opts.ReapplyRules,
+		CheckConfig:   opts.CheckConfig,
+		ReloadCNIpset: opts.ReloadCNIpset,
+		StatusExtra:   opts.StatusExtra,
+		ScriptByName:  opts.ScriptByName,
+		ShutdownHook:  cancel,
+	}
+	if opts.Applier != nil {
+		deps.ApplyPending = opts.Applier.ApplyPending
 	}
 	mux := NewMux(deps)
 
 	// 后台资源同步（gitee → bin/sing-box / var/zoo.raw.json / var/cn.txt）。
 	if opts.Updater != nil {
-		StartSyncLoop(ctx, opts.Updater, opts.Sync, opts.Emitter)
+		StartSyncLoop(ctx, opts.Updater, opts.Sync, opts.Emitter, opts.Applier)
 	}
 
 	httpDone := make(chan error, 1)

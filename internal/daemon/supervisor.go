@@ -217,6 +217,24 @@ func (s *Supervisor) Restart(ctx context.Context) error {
 	return s.bootStep(ctx, true /*skipStartupIfInstalled = iptables 已装时跳过*/)
 }
 
+// RecoverFromFailedApply 用于 daemon.Applier 在 auto-apply 失败 revert 旧文件
+// 之后,把 sing-box 重新拉起来。等价于"按 revert 后的(旧)config 再来一次 Restart",
+// 但允许从 Fatal/Reloading 入口(因为 Restart 失败后 bootStep 内部已经 toFatal)。
+//
+// 不要从 HTTP API 调:Fatal → Reloading 的转移仅为这条恢复路径开放,普通代码路径
+// 仍应把 Fatal 当作终态处理。iptables 还在(Restart 路径不拆),所以走 skip-startup
+// 分支,不会重跑 startup.sh / 触动 ipset。
+func (s *Supervisor) RecoverFromFailedApply(ctx context.Context) error {
+	if err := s.sm.Transition(StateReloading); err != nil {
+		return err
+	}
+	s.killChild()
+	s.mu.Lock()
+	s.restartCount++
+	s.mu.Unlock()
+	return s.bootStep(ctx, true /*skipStartupIfInstalled*/)
+}
+
 // Stop 拆 iptables + 停 sing-box；进入 stopped。
 func (s *Supervisor) Stop(ctx context.Context) error {
 	if err := s.sm.Transition(StateStopping); err != nil {

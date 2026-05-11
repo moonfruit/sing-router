@@ -140,6 +140,9 @@ func TestLoadDaemonConfigGiteeAndSyncDefaults(t *testing.T) {
 	if cfg.Sync.SyncOnStartDelaySec() != 300 {
 		t.Fatalf("sync on_start_delay default = %d", cfg.Sync.SyncOnStartDelaySec())
 	}
+	if !cfg.Sync.SyncAutoApply() {
+		t.Fatalf("sync auto_apply default should be true; got false")
+	}
 }
 
 func TestLoadDaemonConfigGiteeFromTOML(t *testing.T) {
@@ -163,6 +166,7 @@ path = "zoo.json"
 [sync]
 interval_seconds   = 0
 on_start_delay_sec = 60
+auto_apply         = false
 `
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
@@ -189,6 +193,10 @@ on_start_delay_sec = 60
 	}
 	if cfg.Sync.SyncOnStartDelaySec() != 60 {
 		t.Fatalf("on_start_delay = %d", cfg.Sync.SyncOnStartDelaySec())
+	}
+	// 显式 false 必须保留(不被默认 true 覆盖)。
+	if cfg.Sync.SyncAutoApply() {
+		t.Fatalf("explicit auto_apply=false was overridden to true")
 	}
 }
 

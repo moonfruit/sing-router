@@ -102,10 +102,11 @@ type GiteeZooConfig struct {
 
 // SyncConfig 控制 daemon 后台周期同步行为。CLI 手动 update 命令不受此控制。
 //
-// 用 *int 区分"未提供"（应用默认）与"显式 0"（禁用）。
+// 用 *int / *bool 区分"未提供"（应用默认）与"显式 false / 0"。
 type SyncConfig struct {
-	IntervalSeconds *int `toml:"interval_seconds"`   // 0 = 禁用 daemon 后台同步
-	OnStartDelaySec *int `toml:"on_start_delay_sec"` // daemon 启动后多久首次同步
+	IntervalSeconds *int  `toml:"interval_seconds"`   // 0 = 禁用 daemon 后台同步
+	OnStartDelaySec *int  `toml:"on_start_delay_sec"` // daemon 启动后多久首次同步
+	AutoApply       *bool `toml:"auto_apply"`         // 默认 true：拉到新资源后自动 apply（zoo/sing-box → restart；cn.txt → ipset reload）。false 则仅 log。
 }
 
 type RouterConfig struct {
@@ -283,6 +284,10 @@ func applyDefaults(cfg *DaemonConfig) {
 		v := 300
 		cfg.Sync.OnStartDelaySec = &v
 	}
+	if cfg.Sync.AutoApply == nil {
+		v := true
+		cfg.Sync.AutoApply = &v
+	}
 }
 
 // SyncIntervalSeconds 是 SyncConfig.IntervalSeconds 的安全访问器。未设置时回退默认值。
@@ -299,4 +304,12 @@ func (c SyncConfig) SyncOnStartDelaySec() int {
 		return 300
 	}
 	return *c.OnStartDelaySec
+}
+
+// SyncAutoApply 是 SyncConfig.AutoApply 的安全访问器。未设置时默认 true。
+func (c SyncConfig) SyncAutoApply() bool {
+	if c.AutoApply == nil {
+		return true
+	}
+	return *c.AutoApply
 }

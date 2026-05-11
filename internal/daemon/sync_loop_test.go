@@ -24,7 +24,7 @@ func TestStartSyncLoop_DisabledWhenIntervalZero(t *testing.T) {
 	u := syncpkg.NewUpdater(cfg, rundir)
 	em := newTestEmitter(t)
 
-	StartSyncLoop(context.Background(), u, SyncLoopConfig{IntervalSec: 0}, em)
+	StartSyncLoop(context.Background(), u, SyncLoopConfig{IntervalSec: 0}, em, nil)
 	// 给一段宽限时间——若不慎启动了 goroutine 它会去打 127.0.0.1:1，cn.txt 仍不会出现。
 	time.Sleep(100 * time.Millisecond)
 	if _, err := os.Stat(filepath.Join(rundir, "var", "cn.txt")); !os.IsNotExist(err) {
@@ -66,7 +66,7 @@ func TestStartSyncLoop_RunsAndStopsOnCtxCancel(t *testing.T) {
 
 	em := newTestEmitter(t)
 	ctx, cancel := context.WithCancel(context.Background())
-	StartSyncLoop(ctx, u, SyncLoopConfig{IntervalSec: 1, OnStartDelaySec: 0}, em)
+	StartSyncLoop(ctx, u, SyncLoopConfig{IntervalSec: 1, OnStartDelaySec: 0}, em, nil)
 
 	// 等到 cn.txt 出现或超时——证明 loop 至少跑过一次 UpdateAll。
 	deadline := time.Now().Add(2 * time.Second)

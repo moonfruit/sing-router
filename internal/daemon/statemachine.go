@@ -57,14 +57,18 @@ func (s *StateMachine) Current() State {
 }
 
 // allowed 描述合法的 (from→to) 关系。
+//
+// StateFatal → StateReloading 仅供 Supervisor.RecoverFromFailedApply 使用 ——
+// Applier 在 auto-apply 流程中失败 revert 旧文件后,需要让 sing-box 用回旧 config
+// 起来。不要把这条转移暴露到 HTTP API 或其它代码路径,以免破坏 Fatal 终态的语义。
 var allowed = map[State]map[State]bool{
 	StateBooting:   {StateRunning: true, StateFatal: true, StateStopping: true},
 	StateRunning:   {StateReloading: true, StateDegraded: true, StateStopping: true},
-	StateReloading: {StateRunning: true, StateFatal: true, StateStopping: true},
+	StateReloading: {StateRunning: true, StateFatal: true, StateStopping: true, StateReloading: true /* RecoverFromFailedApply 在 reloading 中失败仍允许再次 reload */},
 	StateDegraded:  {StateRunning: true, StateStopping: true},
 	StateStopping:  {StateStopped: true, StateFatal: true, StateBooting: true /* shutdown 中途取消极少见，但保留可能 */},
 	StateStopped:   {StateBooting: true, StateStopping: true},
-	StateFatal:     {StateStopping: true},
+	StateFatal:     {StateStopping: true, StateReloading: true /* 仅 Applier revert 后用 */},
 }
 
 // Transition 切换状态；非法转移返回 error，不改变当前 state。

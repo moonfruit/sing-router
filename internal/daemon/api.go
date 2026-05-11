@@ -19,12 +19,14 @@ type APIDeps struct {
 	LogFile    string          // active sing-router.log 绝对路径；用于 /logs 历史 tail
 	Ctx        context.Context // daemon 主 ctx；SSE handler 用它感知 daemon 关停
 
-	// 给 reapply-rules / check 的 hook
-	ReapplyRules func(context.Context) error
-	CheckConfig  func(context.Context) error
-	StatusExtra  func() map[string]any
-	ScriptByName func(name string) ([]byte, error)
-	ShutdownHook func() // 通常关 ctx 让 main 退出
+	// 给 reapply-rules / check / reload-cn-ipset / apply 的 hook
+	ReapplyRules  func(context.Context) error
+	CheckConfig   func(context.Context) error
+	ReloadCNIpset func(context.Context) error // 仅重建 cn ipset,不动 iptables 规则
+	ApplyPending  func(context.Context) error // 把当前磁盘上的 staging/raw 资源真正生效(CLI --apply)
+	StatusExtra   func() map[string]any
+	ScriptByName  func(name string) ([]byte, error)
+	ShutdownHook  func() // 通常关 ctx 让 main 退出
 }
 
 // NewMux 注册所有端点到一个 http.ServeMux。
@@ -77,6 +79,40 @@ func NewMux(deps APIDeps) *http.ServeMux {
 		}
 		if err := deps.CheckConfig(r.Context()); err != nil {
 			writeError(w, http.StatusBadRequest, "config.singbox_check_failed", err.Error(), nil)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	})
+	mux.HandleFunc("/api/v1/apply", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeError(w, http.StatusMethodNotAllowed, "method.not_allowed", "POST required", nil)
+			return
+		}
+		if deps.ApplyPending == nil {
+			writeError(w, http.StatusNotImplemented, "not_implemented", "ApplyPending hook not wired (auto_apply / gitee token may be missing)", nil)
+			return
+		}
+		if err := deps.ApplyPending(r.Context()); err != nil {
+			writeError(w, http.StatusInternalServerError, "apply.failed", err.Error(), nil)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	})
+	mux.HandleFunc("/api/v1/reload-cn-ipset", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeError(w, http.StatusMethodNotAllowed, "method.not_allowed", "POST required", nil)
+			return
+		}
+		if cur := deps.Supervisor.State(); cur != StateRunning {
+			writeError(w, http.StatusConflict, "daemon.state_conflict", "not running: "+cur.String(), nil)
+			return
+		}
+		if deps.ReloadCNIpset == nil {
+			writeError(w, http.StatusNotImplemented, "not_implemented", "ReloadCNIpset hook not wired", nil)
+			return
+		}
+		if err := deps.ReloadCNIpset(r.Context()); err != nil {
+			writeError(w, http.StatusInternalServerError, "shell.reload_cn_ipset_failed", err.Error(), nil)
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
