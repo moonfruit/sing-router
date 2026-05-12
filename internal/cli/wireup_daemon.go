@@ -40,6 +40,13 @@ func realRunDaemon(ctx context.Context, rundir string) error {
 	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
 		return fmt.Errorf("mkdir log dir: %w", err)
 	}
+	// 把进程的 fd 2 重定向到 log/stderr.log,接住 Go runtime panic 栈和任何
+	// 直写 stderr 的告警。原因:init.d/rc.func 起 daemon 时是
+	//   $PROC $ARGS > /dev/null 2>&1 &
+	// panic 走默认 stderr 就被丢进 /dev/null,事故无痕。重定向后即使所有
+	// goroutine 的 recover 都失效,Go runtime 自己的"fatal error: ..."也会落盘。
+	// 实现拆 _linux.go / _other.go 两份(darwin 没暴露 syscall.Dup3,仅 linux 路由器需要)。
+	_ = redirectStderr(filepath.Join(filepath.Dir(logPath), "stderr.log"))
 	writer, err := log.NewWriter(log.WriterConfig{
 		Path:          logPath,
 		MaxSize:       int64(cfg.Log.MaxSizeMB) * 1024 * 1024,
@@ -220,6 +227,7 @@ func realRunDaemon(ctx context.Context, rundir string) error {
 			}
 			return runner.Run(ctx, string(startup), nil)
 		},
+		ReopenLog:     writer.Reopen,
 		CheckConfig:   checkConfig,
 		ReloadCNIpset: reloadCNIpset,
 		StatusExtra:   buildStatusExtra(rundir, cfg.Runtime.ConfigDir, cfg.Install.Firmware),

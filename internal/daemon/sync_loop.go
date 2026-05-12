@@ -30,6 +30,14 @@ func StartSyncLoop(ctx context.Context, updater *syncpkg.Updater, cfg SyncLoopCo
 		return
 	}
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				reportPanic("sync.loop", r)
+				em.Fatal("recover", "panic.recovered",
+					"panic in {Name}: see stderr.log for stack",
+					map[string]any{"Name": "sync.loop"})
+			}
+		}()
 		em.Info("sync", "sync.loop.started",
 			"background sync starting in {DelaySec}s; interval={IntervalSec}s; auto_apply={AutoApply}",
 			map[string]any{"DelaySec": cfg.OnStartDelaySec, "IntervalSec": cfg.IntervalSec, "AutoApply": cfg.AutoApply})

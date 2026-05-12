@@ -29,6 +29,10 @@ type Options struct {
 	StatusExtra   func() map[string]any
 	ScriptByName  func(name string) ([]byte, error)
 
+	// ReopenLog 在收到 SIGHUP 时调用,用于 logrotate copytruncate 反向场景。
+	// 为 nil 时 SIGHUP 仅被吞掉(不让 Go runtime 走默认终止)。
+	ReopenLog func() error
+
 	// Updater 与 Sync 控制 daemon 后台资源同步；Updater 为 nil 时不启动后台 loop。
 	// Applier 为 nil 时即使 Sync.AutoApply=true 也只做日志(不会真 apply)。
 	Updater *syncpkg.Updater
@@ -72,12 +76,47 @@ func Run(ctx context.Context, opts Options) error {
 	}
 
 	httpDone := make(chan error, 1)
-	go func() { httpDone <- ServeHTTP(ctx, mux, opts.Listen) }()
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				reportPanic("daemon.http", r)
+				opts.Emitter.Fatal("recover", "panic.recovered",
+					"panic in {Name}: see stderr.log for stack",
+					map[string]any{"Name": "daemon.http"})
+				cancel() // 走主循环的 graceful Shutdown,确保 teardown.sh 跑
+				httpDone <- fmt.Errorf("panic: %v", r)
+			}
+		}()
+		httpDone <- ServeHTTP(ctx, mux, opts.Listen)
+	}()
 
-	// SIGTERM/SIGINT
+	// 信号: TERM/INT → cancel ctx, HUP → reopen 日志(不退出), PIPE → 忽略
+	// (fd 2 现在被 wireup 重定向到 stderr.log,EPIPE 不应该再撞到 Go 默认 sigpipe-on-fd-2)。
+	signal.Ignore(syscall.SIGPIPE)
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
 	defer signal.Stop(sigCh)
+
+	hupCh := make(chan os.Signal, 1)
+	signal.Notify(hupCh, syscall.SIGHUP)
+	defer signal.Stop(hupCh)
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				reportPanic("daemon.hup", r)
+			}
+		}()
+		for range hupCh {
+			if opts.ReopenLog != nil {
+				if err := opts.ReopenLog(); err != nil {
+					opts.Emitter.Warn("log", "log.reopen.failed",
+						"reopen log on SIGHUP: {Err}", map[string]any{"Err": err.Error()})
+				} else {
+					opts.Emitter.Info("log", "log.reopen.ok", "log reopened on SIGHUP", nil)
+				}
+			}
+		}
+	}()
 
 	// Boot supervisor
 	if err := opts.Supervisor.Boot(ctx); err != nil {
@@ -87,7 +126,19 @@ func Run(ctx context.Context, opts Options) error {
 
 	// 后台跑 supervisor restart loop
 	runDone := make(chan error, 1)
-	go func() { runDone <- opts.Supervisor.Run(ctx) }()
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				reportPanic("supervisor.Run", r)
+				opts.Emitter.Fatal("recover", "panic.recovered",
+					"panic in {Name}: see stderr.log for stack",
+					map[string]any{"Name": "supervisor.Run"})
+				cancel()
+				runDone <- fmt.Errorf("panic: %v", r)
+			}
+		}()
+		runDone <- opts.Supervisor.Run(ctx)
+	}()
 
 	select {
 	case <-sigCh:

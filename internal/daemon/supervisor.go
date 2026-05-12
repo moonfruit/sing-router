@@ -143,10 +143,27 @@ func (s *Supervisor) startSingBox(ctx context.Context) error {
 	s.mu.Unlock()
 
 	// stderr → CLEF
-	go s.consumeStderr(pr)
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				reportPanic("supervisor.consumeStderr", r)
+				if s.cfg.Emitter != nil {
+					s.cfg.Emitter.Fatal("recover", "panic.recovered",
+						"panic in {Name}: see stderr.log for stack",
+						map[string]any{"Name": "supervisor.consumeStderr"})
+				}
+			}
+		}()
+		s.consumeStderr(pr)
+	}()
 
 	// wait goroutine
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				reportPanic("supervisor.reaper", r)
+			}
+		}()
 		_ = cmd.Wait()
 		_ = pw.Close()
 		close(s.childExitedCh())
