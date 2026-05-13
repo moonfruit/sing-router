@@ -11,8 +11,9 @@ import (
 
 // PrettyOptions 控制 Pretty 渲染。
 type PrettyOptions struct {
-	LocalTZ      *time.Location // 与守护进程当前时区相同时省略 TZ 段
-	DisableColor bool
+	LocalTZ *time.Location // 与守护进程当前时区相同时省略 TZ 段
+	Profile Profile        // 颜色 profile；ProfileNone（默认）时不上色
+	Conn    *ConnColorizer // 可选；非 nil 时给 ConnectionId 着色（profile=none 自动 no-op）
 }
 
 var placeholderRe = regexp.MustCompile(`\{([A-Za-z_][A-Za-z0-9_]*)\}`)
@@ -52,10 +53,16 @@ func Pretty(e *clef.Event, opts PrettyOptions) string {
 	}
 	sb.WriteByte(' ')
 
-	// 级别
+	// 级别（带颜色）
 	levelName, _ := getString(e, "@l")
 	lvl := FromCLEFName(levelName)
-	sb.WriteString(padRight(lvl.String(), 5))
+	if pre := LevelColorPrefix(opts.Profile, lvl); pre != "" {
+		sb.WriteString(pre)
+		sb.WriteString(padRight(lvl.String(), 5))
+		sb.WriteString(ansiReset)
+	} else {
+		sb.WriteString(padRight(lvl.String(), 5))
+	}
 	sb.WriteByte(' ')
 
 	// Source 段
@@ -80,18 +87,23 @@ func Pretty(e *clef.Event, opts PrettyOptions) string {
 			sb.WriteString(det)
 		}
 	} else {
-		sb.WriteString(renderTemplate(e, mt))
+		sb.WriteString(renderTemplate(e, mt, opts))
 	}
 	return sb.String()
 }
 
-func renderTemplate(e *clef.Event, tmpl string) string {
+func renderTemplate(e *clef.Event, tmpl string, opts PrettyOptions) string {
 	return placeholderRe.ReplaceAllStringFunc(tmpl, func(match string) string {
 		name := match[1 : len(match)-1]
-		if v, ok := e.Get(name); ok {
-			return fmt.Sprintf("%v", v)
+		v, ok := e.Get(name)
+		if !ok {
+			return match
 		}
-		return match
+		s := fmt.Sprintf("%v", v)
+		if name == "ConnectionId" && opts.Conn != nil {
+			return opts.Conn.Wrap(s)
+		}
+		return s
 	})
 }
 

@@ -21,7 +21,7 @@ file          = "log/sing-router.log"
 rotate        = "internal"
 max_size_mb   = 5
 max_backups   = 3
-disable_color = false
+color_profile = "256"
 
 [zoo]
 extract_keys              = ["outbounds", "route.rules", "route.rule_set", "route.final"]
@@ -64,6 +64,9 @@ func TestLoadDaemonConfig(t *testing.T) {
 	}
 	if cfg.Zoo.RuleSetDedupStrategy != "builtin_wins" {
 		t.Fatal("Zoo.RuleSetDedupStrategy mismatch")
+	}
+	if cfg.Log.ColorProfile != "256" {
+		t.Fatalf("Log.ColorProfile mismatch: %q", cfg.Log.ColorProfile)
 	}
 	if cfg.Install.DownloadSingBox != true {
 		t.Fatal("Install.DownloadSingBox mismatch")

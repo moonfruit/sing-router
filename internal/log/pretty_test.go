@@ -48,7 +48,7 @@ func TestPrettyDaemonEvent(t *testing.T) {
 	in := `{"@t":"2026-05-02T12:34:56.789+08:00","@l":"Information","@mt":"supervisor: sing-box ready in {ReadyDurationMs}ms","Source":"daemon","Module":"supervisor","ReadyDurationMs":1218}`
 	e := mustParse(t, in)
 	loc, _ := time.LoadLocation("Asia/Shanghai")
-	out := Pretty(e, PrettyOptions{LocalTZ: loc, DisableColor: true})
+	out := Pretty(e, PrettyOptions{LocalTZ: loc})
 	want := "2026-05-02 12:34:56.789 INFO  [daemon] supervisor: sing-box ready in 1218ms"
 	if out != want {
 		t.Fatalf("\nwant %q\ngot  %q", want, out)
@@ -59,7 +59,7 @@ func TestPrettyShowsDifferentTZ(t *testing.T) {
 	in := `{"@t":"2026-05-02T04:34:56.789+00:00","@l":"Information","@mt":"hello","Source":"daemon"}`
 	e := mustParse(t, in)
 	loc, _ := time.LoadLocation("Asia/Shanghai")
-	out := Pretty(e, PrettyOptions{LocalTZ: loc, DisableColor: true})
+	out := Pretty(e, PrettyOptions{LocalTZ: loc})
 	if !strings.HasPrefix(out, "+0000 ") {
 		t.Fatalf("expected TZ prefix, got %q", out)
 	}
@@ -69,7 +69,7 @@ func TestPrettySingBoxEvent(t *testing.T) {
 	in := `{"@t":"2026-05-02T12:34:57.001+08:00","@l":"Information","@mt":"{Module}/{Type}: {Detail}","Source":"sing-box","Module":"router","Type":"default","Detail":"outbound connection to www.example.com:443"}`
 	e := mustParse(t, in)
 	loc, _ := time.LoadLocation("Asia/Shanghai")
-	out := Pretty(e, PrettyOptions{LocalTZ: loc, DisableColor: true})
+	out := Pretty(e, PrettyOptions{LocalTZ: loc})
 	want := "2026-05-02 12:34:57.001 INFO  [sing-box] router/default: outbound connection to www.example.com:443"
 	if out != want {
 		t.Fatalf("\nwant %q\ngot  %q", want, out)
@@ -80,7 +80,7 @@ func TestPrettyMissingTemplate(t *testing.T) {
 	in := `{"@t":"2026-05-02T12:34:56+08:00","@l":"Warning","Source":"daemon"}`
 	e := mustParse(t, in)
 	loc, _ := time.LoadLocation("Asia/Shanghai")
-	out := Pretty(e, PrettyOptions{LocalTZ: loc, DisableColor: true})
+	out := Pretty(e, PrettyOptions{LocalTZ: loc})
 	if !strings.Contains(out, "WARN") || !strings.Contains(out, "[daemon]") {
 		t.Fatalf("pretty fallback missing: %q", out)
 	}

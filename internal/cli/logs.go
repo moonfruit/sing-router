@@ -1,107 +1,235 @@
 package cli
 
 import (
-	"bufio"
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
-	"net/url"
-	"strconv"
+	"os"
+	"os/signal"
+	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/moonfruit/sing2seq/clef"
 	"github.com/spf13/cobra"
 
-	log "github.com/moonfruit/sing-router/internal/log"
+	"github.com/moonfruit/sing-router/internal/config"
+	"github.com/moonfruit/sing-router/internal/log"
 )
 
 func newLogsCmd() *cobra.Command {
 	var (
-		source  string
-		n       int
-		follow  bool
-		level   string
-		eventID string
-		asJSON  bool
+		rundir       string
+		lines        int
+		all          bool
+		follow       bool
+		followName   bool
+		source       string
+		level        string
+		eventID      string
+		asJSON       bool
+		colorMode    string
+		colorProfile string
 	)
 	cmd := &cobra.Command{
-		Use:   "logs",
-		Short: "Show daemon + sing-box logs",
+		Use:   "logs [FILE]",
+		Short: "Render sing-router/sing-box CLEF logs from a file (defaults to the daemon's active log)",
+		Long: `Render CLEF JSON Lines into human-readable form.
+
+Without FILE the daemon's active log file (log/sing-router.log under rundir) is used:
+the path is fetched from the running daemon's /api/v1/status when available, otherwise
+derived from <rundir>/daemon.toml.
+
+By default the last 200 lines are rendered. Use --all to render the whole file, or
+-n N to pick a specific number. -f follows the open fd (stop on rotate); -F follows
+the path (handle rotate / truncate / re-create).
+
+Lines that don't parse as CLEF JSON (e.g. Go runtime panic stacks in stderr.log)
+pass through verbatim.`,
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client := NewHTTPClient(getDaemonBase(cmd))
-			q := url.Values{}
-			if source != "" {
-				q.Set("source", source)
+			if all && cmd.Flags().Changed("lines") {
+				return fmt.Errorf("--all and --lines are mutually exclusive")
 			}
-			if n > 0 {
-				q.Set("n", strconv.Itoa(n))
+			if follow && followName {
+				return fmt.Errorf("-f and -F are mutually exclusive")
 			}
-			if level != "" {
-				q.Set("level", level)
-			}
-			if eventID != "" {
-				q.Set("event_id", eventID)
-			}
-			if follow {
-				q.Set("follow", "true")
-			}
-			resp, err := client.GetStream("/api/v1/logs", q)
+
+			path, cfgProfile, err := resolveLogPath(cmd, rundir, args)
 			if err != nil {
-				if IsDaemonNotRunning(err) {
-					return fmt.Errorf("daemon not running")
-				}
 				return err
 			}
-			defer func() { _ = resp.Body.Close() }()
-			return streamLogs(cmd.OutOrStdout(), resp.Body, asJSON, time.Local)
+
+			filter, err := parseLogsFilter(source, level, eventID)
+			if err != nil {
+				return err
+			}
+
+			out := cmd.OutOrStdout()
+			profile := log.ProfileNone
+			if !asJSON {
+				profile, err = ResolveLogColor(colorMode, colorProfile, cfgProfile, out)
+				if err != nil {
+					return err
+				}
+			}
+
+			tz := time.Local
+			renderer := newLogRenderer(out, asJSON, tz, profile, filter)
+
+			f, err := os.Open(path)
+			if err != nil {
+				return err
+			}
+			defer func() { _ = f.Close() }()
+
+			startN := lines
+			if all {
+				startN = 0
+			}
+			if _, err := SeekToLastN(f, startN); err != nil {
+				return err
+			}
+
+			if err := EmitLines(f, renderer.emit); err != nil {
+				return err
+			}
+
+			if !follow && !followName {
+				return nil
+			}
+
+			emitOff, err := f.Seek(0, io.SeekCurrent)
+			if err != nil {
+				return err
+			}
+
+			ctx, cancel := signal.NotifyContext(cmd.Context(), syscall.SIGINT, syscall.SIGTERM)
+			defer cancel()
+
+			return Follow(ctx, path, emitOff, renderer.emit, FollowConfig{FollowName: followName})
 		},
 	}
-	cmd.Flags().StringVar(&source, "source", "", "all|daemon|sing-box")
-	cmd.Flags().IntVarP(&n, "n", "n", 100, "tail N lines (history)")
-	cmd.Flags().BoolVarP(&follow, "follow", "f", false, "follow new events via SSE")
-	cmd.Flags().StringVar(&level, "level", "", "min level (trace|debug|info|warn|error|fatal)")
+	cmd.Flags().StringVarP(&rundir, "rundir", "D", "", "Runtime root directory used when FILE is omitted (default /opt/home/sing-router)")
+	cmd.Flags().IntVarP(&lines, "lines", "n", 200, "render the last N lines")
+	cmd.Flags().BoolVarP(&all, "all", "a", false, "render the entire file (overrides -n)")
+	cmd.Flags().BoolVarP(&follow, "follow", "f", false, "tail -f: follow the file by fd, stop on rotate")
+	cmd.Flags().BoolVarP(&followName, "F", "F", false, "tail -F: follow the path, handle rotate/truncate/re-create")
+	cmd.Flags().StringVar(&source, "source", "", "filter Source: all|daemon|sing-box (default all)")
+	cmd.Flags().StringVar(&level, "level", "", "minimum level: trace|debug|info|warn|error|fatal")
 	cmd.Flags().StringVar(&eventID, "event-id", "", "filter by EventID prefix")
-	cmd.Flags().BoolVar(&asJSON, "json", false, "emit raw CLEF JSON lines")
+	cmd.Flags().BoolVar(&asJSON, "json", false, "emit raw CLEF JSON lines (no rendering, no color)")
+	cmd.Flags().StringVar(&colorMode, "color", "auto", "colorize output: auto|always|never")
+	cmd.Flags().StringVar(&colorProfile, "color-profile", "", "color palette: auto|truecolor|256|8 (defaults to daemon.toml [log].color_profile, then env)")
 	return cmd
 }
 
-// streamLogs 把 resp.Body 当 NDJSON 处理，每行用 pretty 渲染。
-// SSE 流由 daemon 用 `data: {...}\n\n` 编码；这里接受两种：纯 NDJSON，或 SSE。
-func streamLogs(out io.Writer, r io.Reader, asJSON bool, tz *time.Location) error {
-	sc := bufio.NewScanner(r)
-	sc.Buffer(make([]byte, 64*1024), 4*1024*1024)
-	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
-		if line == "" {
-			continue
-		}
-		// SSE: 取 "data:" 后面的部分
-		if strings.HasPrefix(line, "data:") {
-			line = strings.TrimSpace(line[5:])
-			if line == "" {
-				continue
+// resolveLogPath 解析 logs 命令的目标文件路径与 daemon.toml 中的 color_profile。
+// 顺序：
+//  1. 显式 FILE 参数 → 直接用，cfgProfile 仍尽力从本地 daemon.toml 取
+//  2. 在线 GET /api/v1/status → daemon.log_file 字段
+//  3. 离线读 <rundir>/daemon.toml → filepath.Join(rundir, cfg.Log.File)
+func resolveLogPath(cmd *cobra.Command, rundir string, args []string) (path string, cfgProfile string, err error) {
+	if rundir == "" {
+		rundir = "/opt/home/sing-router"
+	}
+	cfg, _ := config.LoadDaemonConfig(filepath.Join(rundir, "daemon.toml"))
+	if cfg != nil {
+		cfgProfile = cfg.Log.ColorProfile
+	}
+
+	if len(args) == 1 {
+		return args[0], cfgProfile, nil
+	}
+
+	// 优先在线
+	client := NewHTTPClient(getDaemonBase(cmd))
+	var body map[string]any
+	if err := client.GetJSON("/api/v1/status", &body); err == nil {
+		if d, ok := body["daemon"].(map[string]any); ok {
+			if lf, ok := d["log_file"].(string); ok && lf != "" {
+				return lf, cfgProfile, nil
 			}
 		}
-		if asJSON {
-			fmt.Fprintln(out, line)
-			continue
-		}
-		ev, err := decodeOrderedEvent(line)
-		if err != nil {
-			fmt.Fprintln(out, line)
-			continue
-		}
-		fmt.Fprintln(out, log.Pretty(ev, log.PrettyOptions{LocalTZ: tz, DisableColor: false}))
 	}
-	return sc.Err()
+
+	// 离线兜底
+	if cfg == nil || cfg.Log.File == "" {
+		return "", cfgProfile, fmt.Errorf("cannot determine log file; pass FILE explicitly or set --rundir")
+	}
+	return filepath.Join(rundir, cfg.Log.File), cfgProfile, nil
+}
+
+// logRenderer 把每行 emit 转化为渲染输出。零拷贝场景下 emit 的字节会被
+// json.Unmarshal 解析；写出后进入下一行。
+type logRenderer struct {
+	out      io.Writer
+	asJSON   bool
+	tz       *time.Location
+	profile  log.Profile
+	filter   *logsFilter
+	conn     *log.ConnColorizer
+	scratch  []byte
+	prettyOp log.PrettyOptions
+}
+
+func newLogRenderer(out io.Writer, asJSON bool, tz *time.Location, profile log.Profile, filter *logsFilter) *logRenderer {
+	r := &logRenderer{
+		out:     out,
+		asJSON:  asJSON,
+		tz:      tz,
+		profile: profile,
+		filter:  filter,
+		conn:    log.NewConnColorizer(profile),
+	}
+	r.prettyOp = log.PrettyOptions{LocalTZ: tz, Profile: profile, Conn: r.conn}
+	return r
+}
+
+func (r *logRenderer) emit(line []byte) {
+	if len(line) == 0 {
+		return
+	}
+	if r.asJSON {
+		if !r.filter.matchLine(line) {
+			return
+		}
+		r.scratch = append(r.scratch[:0], line...)
+		r.scratch = append(r.scratch, '\n')
+		_, _ = r.out.Write(r.scratch)
+		return
+	}
+	// 非 JSON 行（如 stderr.log 的 panic 栈）原样输出，不应用过滤。
+	if len(line) == 0 || line[0] != '{' {
+		r.scratch = append(r.scratch[:0], line...)
+		r.scratch = append(r.scratch, '\n')
+		_, _ = r.out.Write(r.scratch)
+		return
+	}
+	ev, err := decodeOrderedEvent(line)
+	if err != nil {
+		r.scratch = append(r.scratch[:0], line...)
+		r.scratch = append(r.scratch, '\n')
+		_, _ = r.out.Write(r.scratch)
+		return
+	}
+	if !r.filter.matchEvent(ev) {
+		return
+	}
+	fmt.Fprintln(r.out, log.Pretty(ev, r.prettyOp))
 }
 
 // decodeOrderedEvent 用 json.Decoder 保留键的相对顺序（Go 标准库不保证 map 顺序，
 // 因此用 RawMessage 的两遍解析 + 顺序记录恢复）。
-func decodeOrderedEvent(line string) (*clef.Event, error) {
+//
+// 解析数字时启用 UseNumber，避免大整数（如 ConnectionId）被默认 float64 渲染成
+// 科学计数法（"1.23e+08"）。json.Number 的底层是字符串，%v 直接输出原文。
+func decodeOrderedEvent(line []byte) (*clef.Event, error) {
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(line), &raw); err != nil {
+	if err := json.Unmarshal(line, &raw); err != nil {
 		return nil, err
 	}
 	keys, err := jsonKeys(line)
@@ -111,8 +239,10 @@ func decodeOrderedEvent(line string) (*clef.Event, error) {
 	ev := clef.NewEvent()
 	for _, k := range keys {
 		if rv, ok := raw[k]; ok {
+			dec := json.NewDecoder(bytes.NewReader(rv))
+			dec.UseNumber()
 			var v any
-			_ = json.Unmarshal(rv, &v)
+			_ = dec.Decode(&v)
 			ev.Set(k, v)
 		}
 	}
@@ -120,8 +250,8 @@ func decodeOrderedEvent(line string) (*clef.Event, error) {
 }
 
 // jsonKeys 顺序提取 JSON 文本的顶层 key。
-func jsonKeys(s string) ([]string, error) {
-	dec := json.NewDecoder(strings.NewReader(s))
+func jsonKeys(s []byte) ([]string, error) {
+	dec := json.NewDecoder(strings.NewReader(string(s)))
 	if _, err := dec.Token(); err != nil {
 		return nil, err
 	}
@@ -131,7 +261,11 @@ func jsonKeys(s string) ([]string, error) {
 		if err != nil {
 			return nil, err
 		}
-		keys = append(keys, tok.(string))
+		key, ok := tok.(string)
+		if !ok {
+			return nil, errors.New("non-string key")
+		}
+		keys = append(keys, key)
 		var skip json.RawMessage
 		if err := dec.Decode(&skip); err != nil {
 			return nil, err
@@ -139,3 +273,4 @@ func jsonKeys(s string) ([]string, error) {
 	}
 	return keys, nil
 }
+

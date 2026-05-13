@@ -211,7 +211,6 @@ func realRunDaemon(ctx context.Context, rundir string) error {
 		Listen:     cfg.HTTP.Listen,
 		Version:    version.String(),
 		Emitter:    em,
-		Bus:        stack.Bus,
 		LogFile:    logPath,
 		Supervisor: sup,
 		Updater:    updater,

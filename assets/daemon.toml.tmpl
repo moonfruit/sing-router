@@ -18,7 +18,13 @@ file            = "log/sing-router.log"
 rotate          = "internal"
 max_size_mb     = 10
 max_backups     = 5
-disable_color   = false
+# color_profile 控制 `sing-router logs` 渲染的颜色能力：
+#   auto       — 按 NO_COLOR / COLORTERM / TERM 环境变量推断（路由器无 TERM 通常退回 none）
+#   truecolor  — 24bit RGB（最现代的终端如 iTerm2 / 新版 tmux）
+#   256        — xterm-256
+#   8          — 基础 8 色（最保守）
+#   none       — 关色
+color_profile   = "auto"
 include_stack   = false
 
 [supervisor]

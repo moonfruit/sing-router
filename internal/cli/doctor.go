@@ -208,38 +208,6 @@ const (
 	ansiCyan   = "\x1b[36m"
 )
 
-// resolveColor 把 --color 取值（auto/always/never）+ stdout TTY 状态 + NO_COLOR 环境变量
-// 解析为最终是否着色。NO_COLOR（任意非空值）等同于 --color=never，但 --color=always 显式压过。
-func resolveColor(mode string, w io.Writer) (bool, error) {
-	switch mode {
-	case "always":
-		return true, nil
-	case "never":
-		return false, nil
-	case "", "auto":
-		if os.Getenv("NO_COLOR") != "" {
-			return false, nil
-		}
-		return isTerminal(w), nil
-	default:
-		return false, fmt.Errorf("--color must be auto|always|never, got %q", mode)
-	}
-}
-
-// isTerminal 判定 w 是否为字符设备（终端）。不引入第三方依赖：os.File.Stat() + ModeCharDevice
-// 在 darwin/linux 上都可用；非 *os.File（如测试里的 bytes.Buffer）一律视为非 TTY。
-func isTerminal(w io.Writer) bool {
-	f, ok := w.(*os.File)
-	if !ok {
-		return false
-	}
-	info, err := f.Stat()
-	if err != nil {
-		return false
-	}
-	return info.Mode()&os.ModeCharDevice != 0
-}
-
 func ansiCodeFor(status string) string {
 	switch status {
 	case "warn":

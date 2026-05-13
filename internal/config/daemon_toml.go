@@ -46,7 +46,7 @@ type LogConfig struct {
 	Rotate       string `toml:"rotate"`
 	MaxSizeMB    int    `toml:"max_size_mb"`
 	MaxBackups   int    `toml:"max_backups"`
-	DisableColor bool   `toml:"disable_color"`
+	ColorProfile string `toml:"color_profile"` // auto | truecolor | 256 | 8 | none
 	IncludeStack bool   `toml:"include_stack"`
 }
 
@@ -236,6 +236,9 @@ func applyDefaults(cfg *DaemonConfig) {
 	}
 	if cfg.Log.MaxBackups == 0 {
 		cfg.Log.MaxBackups = 5
+	}
+	if cfg.Log.ColorProfile == "" {
+		cfg.Log.ColorProfile = "auto"
 	}
 	if len(cfg.Zoo.ExtractKeys) == 0 {
 		cfg.Zoo.ExtractKeys = []string{"outbounds", "route.rules", "route.rule_set", "route.final"}
