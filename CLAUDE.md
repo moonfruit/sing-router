@@ -19,7 +19,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - 端到端集成测试（Docker，模拟 Entware + busybox ash）：`make docker-test`；保留容器排障：`KEEP=1 make docker-test`；强制 update 阶段：`WITH_UPDATE=1 make docker-test`
 - 构造假 sing-box（供 docker-test 兜底）：`make fakebox`
 - 刷新嵌入 cn.txt：`make update-cn`；刷新嵌入 rule_set 兜底：`make update-rule-sets`（需 sops 解密 `secrets/sing-router.env`）；两者一起：`make update-all`
-- 路由器上排障（read-only）：`sing-router doctor`（叠加 `--check-routing` / `--rules-only` / `--json`）
+- 路由器上排障（read-only）：`sing-router doctor`（叠加 `--skip-routing` / `--rules-only` / `--color=auto|always|never` / `--json`）。路由/iptables 检查默认就跑；非 Linux 平台、`--skip-routing` 或 `--rules-only`-反向场景才跳过。
 
 `make build*` 注入 `internal/version.Version`：`0.1.0+<git-short-sha>`，可用 `VERSION=...` 覆盖。
 

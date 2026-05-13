@@ -2,7 +2,6 @@ package cli
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -17,9 +16,8 @@ import (
 )
 
 type doctorOpts struct {
-	forceRouting bool // --check-routing
-	skipRouting  bool // --skip-routing
-	rulesOnly    bool // --rules-only
+	skipRouting bool // --skip-routing
+	rulesOnly   bool // --rules-only
 }
 
 type doctorCheck struct {
@@ -30,29 +28,31 @@ type doctorCheck struct {
 
 func newDoctorCmd() *cobra.Command {
 	var (
-		rundir string
-		asJSON bool
-		opts   doctorOpts
+		rundir    string
+		asJSON    bool
+		colorMode string
+		opts      doctorOpts
 	)
 	cmd := &cobra.Command{
 		Use:   "doctor",
 		Short: "Read-only health check of all sing-router files and runtime expectations",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if opts.forceRouting && opts.skipRouting {
-				return errors.New("--check-routing and --skip-routing are mutually exclusive")
-			}
 			if rundir == "" {
 				rundir = "/opt/home/sing-router"
 			}
+			useColor, err := resolveColor(colorMode, cmd.OutOrStdout())
+			if err != nil {
+				return err
+			}
 			checks := runDoctorChecks(rundir, opts)
-			return printDoctor(cmd.OutOrStdout(), checks, asJSON)
+			return printDoctor(cmd.OutOrStdout(), checks, asJSON, useColor)
 		},
 	}
 	cmd.Flags().StringVarP(&rundir, "rundir", "D", "", "Runtime root directory")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "JSON output")
-	cmd.Flags().BoolVar(&opts.forceRouting, "check-routing", false, "Force runtime ip/iptables checks even if sing-box appears down")
 	cmd.Flags().BoolVar(&opts.skipRouting, "skip-routing", false, "Skip runtime ip/iptables checks entirely")
 	cmd.Flags().BoolVar(&opts.rulesOnly, "rules-only", false, "Only run runtime ip/iptables checks (skip file/dir/firmware checks)")
+	cmd.Flags().StringVar(&colorMode, "color", "auto", "Colorize PASS/WARN/FAIL/INFO output: auto|always|never")
 	return cmd
 }
 
@@ -117,7 +117,9 @@ func runDoctorChecks(rundir string, opts doctorOpts) []doctorCheck {
 	return out
 }
 
-// runRoutingChecks 在 Linux 上按 flag 与 TUN 状态决定是否实际跑路由/iptables 检查。
+// runRoutingChecks 默认就跑路由/iptables 检查；--skip-routing 才跳过。
+// 非 Linux 平台天然跳过；TUN 缺失 / iptables 不通会落到下层 check 的 FAIL，
+// 这是用户希望看到的真实信号，不应在上游沉默吞掉。
 func runRoutingChecks(cfg *config.DaemonConfig, opts doctorOpts) []doctorCheck {
 	if opts.skipRouting {
 		return []doctorCheck{{Name: "routing checks", Status: "info", Detail: "skipped (--skip-routing)"}}
@@ -125,20 +127,14 @@ func runRoutingChecks(cfg *config.DaemonConfig, opts doctorOpts) []doctorCheck {
 	if runtime.GOOS != "linux" {
 		return []doctorCheck{{Name: "routing checks", Status: "info", Detail: "skipped on " + runtime.GOOS}}
 	}
-	r := config.LoadRouting(cfg)
-	if !opts.forceRouting && !tunExists(r.Tun) {
-		return []doctorCheck{{
-			Name:   "routing checks",
-			Status: "info",
-			Detail: "skipped (TUN " + r.Tun + " absent; sing-box not running; use --check-routing to force)",
-		}}
-	}
-	return checkRouting(r)
+	return checkRouting(config.LoadRouting(cfg))
 }
 
 func doctorHookCheck(hc firmware.HookCheck) doctorCheck {
-	prefix := hc.Type + ":"
-	name := prefix + " " + hc.Path
+	name := hc.Path
+	if hc.Type != "file" {
+		name = hc.Type + ": " + hc.Path
+	}
 	if hc.Present {
 		return doctorCheck{Name: name, Status: "pass", Detail: hc.Note}
 	}
@@ -178,7 +174,7 @@ func checkExistsAs(path, label, warnOrFail string) doctorCheck {
 	return doctorCheck{Name: label, Status: "pass"}
 }
 
-func printDoctor(w io.Writer, checks []doctorCheck, asJSON bool) error {
+func printDoctor(w io.Writer, checks []doctorCheck, asJSON, useColor bool) error {
 	if asJSON {
 		return json.NewEncoder(w).Encode(checks)
 	}
@@ -192,6 +188,7 @@ func printDoctor(w io.Writer, checks []doctorCheck, asJSON bool) error {
 		case "info":
 			marker = "INFO"
 		}
+		marker = colorize(useColor, ansiCodeFor(c.Status), marker)
 		if c.Detail == "" {
 			fmt.Fprintf(w, "  %s  %s\n", marker, c.Name)
 		} else {
@@ -199,4 +196,66 @@ func printDoctor(w io.Writer, checks []doctorCheck, asJSON bool) error {
 		}
 	}
 	return nil
+}
+
+// ----------------------- 着色辅助 -----------------------
+
+const (
+	ansiReset  = "\x1b[0m"
+	ansiGreen  = "\x1b[32m"
+	ansiYellow = "\x1b[33m"
+	ansiRed    = "\x1b[31m"
+	ansiCyan   = "\x1b[36m"
+)
+
+// resolveColor 把 --color 取值（auto/always/never）+ stdout TTY 状态 + NO_COLOR 环境变量
+// 解析为最终是否着色。NO_COLOR（任意非空值）等同于 --color=never，但 --color=always 显式压过。
+func resolveColor(mode string, w io.Writer) (bool, error) {
+	switch mode {
+	case "always":
+		return true, nil
+	case "never":
+		return false, nil
+	case "", "auto":
+		if os.Getenv("NO_COLOR") != "" {
+			return false, nil
+		}
+		return isTerminal(w), nil
+	default:
+		return false, fmt.Errorf("--color must be auto|always|never, got %q", mode)
+	}
+}
+
+// isTerminal 判定 w 是否为字符设备（终端）。不引入第三方依赖：os.File.Stat() + ModeCharDevice
+// 在 darwin/linux 上都可用；非 *os.File（如测试里的 bytes.Buffer）一律视为非 TTY。
+func isTerminal(w io.Writer) bool {
+	f, ok := w.(*os.File)
+	if !ok {
+		return false
+	}
+	info, err := f.Stat()
+	if err != nil {
+		return false
+	}
+	return info.Mode()&os.ModeCharDevice != 0
+}
+
+func ansiCodeFor(status string) string {
+	switch status {
+	case "warn":
+		return ansiYellow
+	case "fail":
+		return ansiRed
+	case "info":
+		return ansiCyan
+	default:
+		return ansiGreen
+	}
+}
+
+func colorize(useColor bool, code, s string) string {
+	if !useColor {
+		return s
+	}
+	return code + s + ansiReset
 }

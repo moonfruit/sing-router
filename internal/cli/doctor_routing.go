@@ -332,12 +332,6 @@ func findInterferers(prior []iptRule, ours interfererTarget) []iptRule {
 
 // ----------------------- 顶层入口 -----------------------
 
-// tunExists 判断 TUN 接口当前是否存在；用作「sing-box 是否运行」的近似信号。
-func tunExists(tun string) bool {
-	_, code, _ := runCmd("ip", "link", "show", tun)
-	return code == 0
-}
-
 // checkRouting 跑全套运行时网络规则检查；非 root 则跳过。
 func checkRouting(r config.Routing) []doctorCheck {
 	if os.Geteuid() != 0 {
