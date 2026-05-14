@@ -22,8 +22,8 @@ note "apply HTTP code=$code"
 case "$code" in 501*) skip "apply 未接线（HTTP 501）" ;; esac
 
 new="$(singbox_pid)"
-[ "$new" = "$old" ] || fail "sing-box pid 变了 ($old→$new) —— cn.txt 变更不应重启 sing-box"
+[ "$new" = "$old" ] || fail "sing-box pid 变了 (${old}→$new) —— cn.txt 变更不应重启 sing-box"
 [ "$ms" -eq 0 ] || fail "cn.txt reload 期间出现 ${ms}ms BLACKHOLE —— 必须全程不中断"
 st="$(probe)"
-[ "$st" = PROXY ] || fail "cn reload 后 probe=$st（预期 PROXY）"
+[ "$st" = PROXY ] || fail "cn reload 后 probe=${st}（预期 PROXY）"
 pass "cn.txt 轻量重载：未重启、无中断、probe PROXY"

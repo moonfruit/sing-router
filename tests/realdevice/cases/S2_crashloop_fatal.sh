@@ -15,7 +15,7 @@ sleep 3
 
 if assert_rules_absent; then
     st="$(probe)"
-    [ "$st" = DIRECT ] || fail "StateFatal 且规则已拆，但 probe=$st（预期 DIRECT）"
+    [ "$st" = DIRECT ] || fail "StateFatal 且规则已拆，但 probe=${st}（预期 DIRECT）"
     pass "StateFatal 时规则已拆净；直连可用"
 fi
 fail "StateFatal 但规则未拆净 —— 黑洞风险"

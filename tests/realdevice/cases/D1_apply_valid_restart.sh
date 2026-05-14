@@ -21,5 +21,5 @@ esac
 
 wait_singbox_restart "$old" 90 || fail "合法资源 apply 后未发生重启"
 st="$(probe)"
-[ "$st" = PROXY ] || fail "apply 后 probe=$st（预期 PROXY）"
+[ "$st" = PROXY ] || fail "apply 后 probe=${st}（预期 PROXY）"
 pass "合法 zoo 变更已应用；sing-box 已重启；probe PROXY"

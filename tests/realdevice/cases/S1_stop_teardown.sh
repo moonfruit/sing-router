@@ -16,7 +16,7 @@ sleep 2
 
 if assert_rules_absent; then
     st="$(probe)"
-    [ "$st" = DIRECT ] || fail "规则已拆净但 probe=$st（预期 DIRECT）"
+    [ "$st" = DIRECT ] || fail "规则已拆净但 probe=${st}（预期 DIRECT）"
     pass "teardown 干净；直连可用"
 fi
 fail "stop 后规则未完全拆净 —— 见上方 ✗"

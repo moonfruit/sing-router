@@ -17,12 +17,12 @@ apid=$!
 ms="$(measure_blackhole_ms 90 1)"
 wait "$apid" || true
 code="$(cat "$tmp")"; rm -f "$tmp"
-note "apply HTTP code=$code（restart 失败路径预期 500）"
+note "apply HTTP code=${code}（restart 失败路径预期 500）"
 case "$code" in 501*) skip "apply 未接线（HTTP 501）" ;; esac
 
 wait_state running 120 || fail "revert+recover 后 daemon 未回到 running"
 st="$(probe)"
-[ "$st" = PROXY ] || fail "revert+recover 后 probe=$st（预期 PROXY）"
+[ "$st" = PROXY ] || fail "revert+recover 后 probe=${st}（预期 PROXY）"
 note "restart 失败 → revert → recover 窗口 ≈ ${ms}ms"
 rsh "$RUNDIR/bin/sing-box version >/dev/null 2>&1" \
     || fail "revert 后 bin/sing-box 不是可用二进制（假 box 未被换回）"

@@ -22,7 +22,7 @@ fi
 
 if assert_rules_absent; then
     st="$(probe)"
-    [ "$st" = DIRECT ] || fail "probe=$st（预期 DIRECT）"
+    [ "$st" = DIRECT ] || fail "probe=${st}（预期 DIRECT）"
     pass "优雅 SIGTERM：子进程被收、规则拆净"
 fi
 fail "SIGTERM 后规则未拆净"

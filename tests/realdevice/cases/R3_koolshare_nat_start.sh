@@ -27,5 +27,5 @@ note "nat-start.log 末尾：$hooklog"
 echo "$hooklog" | grep -q "reapply-rules ok" || fail "钩子未记录 'reapply-rules ok'"
 
 st="$(probe)"
-[ "$st" = PROXY ] || fail "钩子执行后 probe=$st（预期 PROXY）"
+[ "$st" = PROXY ] || fail "钩子执行后 probe=${st}（预期 PROXY）"
 pass "koolshare 钩子重装规则成功；probe PROXY（真实 WAN 重拨为手动变体）"

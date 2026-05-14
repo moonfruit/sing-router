@@ -196,9 +196,9 @@ skip() { echo "RESULT $CASE_ID SKIP ${1:-}"; exit 2; }
 require_running() {
     local st p
     st="$(daemon_state)"
-    [ "$st" = running ] || skip "前置不满足：daemon state=$st（需 running）"
+    [ "$st" = running ] || skip "前置不满足：daemon state=${st}（需 running）"
     p="$(probe)"
-    [ "$p" = PROXY ] || skip "前置不满足：probe=$p（需 PROXY）"
+    [ "$p" = PROXY ] || skip "前置不满足：probe=${p}（需 PROXY）"
 }
 
 # restore_to_running : 用例结束 best-effort 把服务恢复到 running（trap EXIT 用）

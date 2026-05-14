@@ -19,5 +19,5 @@ note "连续 BLACKHOLE 窗口 ≈ ${ms}ms（采样粒度 ≈1s，偏粗）"
 
 wait_singbox_restart "$spid" 60 || fail "60s 内未恢复到 running"
 st="$(probe)"
-[ "$st" = PROXY ] || fail "最终 probe=$st（预期 PROXY）"
+[ "$st" = PROXY ] || fail "最终 probe=${st}（预期 PROXY）"
 pass "窗口≈${ms}ms；已恢复 PROXY —— 据此评估「赌快速回归」是否可接受（阈值 IptablesKeepBackoffLtMs=10s）"

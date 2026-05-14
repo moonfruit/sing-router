@@ -18,5 +18,5 @@ note "nat flush 后（类 WAN 重拨）：probe=$mid"
 rsh "$SINGROUTER reapply-rules" >/dev/null 2>&1 || fail "reapply-rules 退出非 0"
 sleep 2
 st="$(probe)"
-[ "$st" = PROXY ] || fail "reapply-rules 后 probe=$st（预期 PROXY）"
-pass "reapply-rules 恢复代理（中间态为 $mid）"
+[ "$st" = PROXY ] || fail "reapply-rules 后 probe=${st}（预期 PROXY）"
+pass "reapply-rules 恢复代理（中间态为 ${mid}）"

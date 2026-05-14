@@ -22,7 +22,7 @@ code="$(cat "$tmp")"; rm -f "$tmp"
 case "$code" in
     501*) skip "apply 未接线（HTTP 501）：需 ApplyPending（auto_apply + gitee token）" ;;
     200*) : ;;
-    *)    note "apply HTTP code=$code（非 200，继续按 pid 变化判断）" ;;
+    *)    note "apply HTTP code=${code}（非 200，继续按 pid 变化判断）" ;;
 esac
 
 new="$(singbox_pid)"
@@ -30,5 +30,5 @@ new="$(singbox_pid)"
 note "applier restart 期间连续 BLACKHOLE 窗口 ≈ ${ms}ms"
 wait_state running 30 || fail "apply 后 daemon 未回到 running"
 st="$(probe)"
-[ "$st" = PROXY ] || fail "最终 probe=$st（预期 PROXY）"
+[ "$st" = PROXY ] || fail "最终 probe=${st}（预期 PROXY）"
 pass "applier restart 窗口≈${ms}ms；已恢复 PROXY（受 ready-check 约束，可达 30s+）"

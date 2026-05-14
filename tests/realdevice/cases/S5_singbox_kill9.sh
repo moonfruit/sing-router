@@ -16,7 +16,7 @@ rsh "kill -9 $spid 2>/dev/null || true"
 
 if wait_singbox_restart "$spid" 90; then
     st="$(probe)"
-    [ "$st" = PROXY ] || fail "已重启但 probe=$st（预期 PROXY）"
+    [ "$st" = PROXY ] || fail "已重启但 probe=${st}（预期 PROXY）"
     pass "单次崩溃已恢复；新 pid=$(singbox_pid)"
 fi
 fail "90s 内 supervisor 未把 sing-box 重启到 running"

@@ -21,7 +21,7 @@ esac
 sleep 3
 
 new="$(singbox_pid)"
-[ "$new" = "$old" ] || fail "no-op apply 却重启了 sing-box ($old→$new) —— sha256 闸门失效"
+[ "$new" = "$old" ] || fail "no-op apply 却重启了 sing-box (${old}→$new) —— sha256 闸门失效"
 st="$(probe)"
-[ "$st" = PROXY ] || fail "probe=$st（预期 PROXY）"
+[ "$st" = PROXY ] || fail "probe=${st}（预期 PROXY）"
 pass "no-op apply：sha256 闸门生效，未重启，probe PROXY"

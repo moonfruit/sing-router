@@ -28,5 +28,5 @@ done
 now_pid="$(singbox_pid)"
 [ "$now_pid" = "$spid" ] || note "WARN sing-box pid 变了 ($spid → $now_pid)；HUP 不应重启进程"
 st="$(probe)"
-[ "$st" = PROXY ] || fail "路由已补回但 probe=$st（预期 PROXY）"
+[ "$st" = PROXY ] || fail "路由已补回但 probe=${st}（预期 PROXY）"
 pass "路由缺失≈${gone_ms}ms；WatchRoutes 已补回；probe PROXY"

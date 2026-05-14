@@ -19,14 +19,14 @@ apid=$!
 ms="$(measure_blackhole_ms 20 1)"
 wait "$apid" || true
 code="$(cat "$tmp")"; rm -f "$tmp"
-note "apply HTTP code=$code（CheckConfig 失败路径返回 200；daemon 日志记 apply.check.failed）"
+note "apply HTTP code=${code}（CheckConfig 失败路径返回 200；daemon 日志记 apply.check.failed）"
 case "$code" in 501*) skip "apply 未接线（HTTP 501）" ;; esac
 
 new="$(singbox_pid)"
-[ "$new" = "$old" ] || fail "sing-box 被重启 ($old→$new) —— 坏配置不应触发重启"
+[ "$new" = "$old" ] || fail "sing-box 被重启 (${old}→$new) —— 坏配置不应触发重启"
 [ "$ms" -eq 0 ] || fail "坏配置 apply 期间出现 ${ms}ms BLACKHOLE —— 必须完全透明"
 cfg_after="$(rsh "sha256sum $RUNDIR/$CONFIG_DIR/zoo.json 2>/dev/null | cut -d' ' -f1")"
-[ "$cfg_before" = "$cfg_after" ] || fail "config.d/zoo.json 未被 revert（$cfg_before → $cfg_after）"
+[ "$cfg_before" = "$cfg_after" ] || fail "config.d/zoo.json 未被 revert（$cfg_before → ${cfg_after}）"
 st="$(probe)"
-[ "$st" = PROXY ] || fail "probe=$st（预期 PROXY）"
+[ "$st" = PROXY ] || fail "probe=${st}（预期 PROXY）"
 pass "check 失败资源已 revert；未重启；config.d/zoo.json 完好；probe PROXY"

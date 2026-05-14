@@ -10,7 +10,7 @@ GITEE_HOST="gitee.com"
 require_running
 trap 'unblock_host "$GITEE_HOST"; restore_to_running' EXIT
 
-note "在路由器 OUTPUT 链 REJECT 到 $GITEE_HOST，再跑 sing-router update all（预期干净失败）"
+note "在路由器 OUTPUT 链 REJECT 到 ${GITEE_HOST}，再跑 sing-router update all（预期干净失败）"
 block_host "$GITEE_HOST" || skip "无法解析/封锁 $GITEE_HOST"
 before="$(probe)"
 
@@ -22,5 +22,5 @@ sleep 2
 [ "$(daemon_state)" = running ] || fail "失败的 update 之后 daemon 状态变了"
 after="$(probe)"
 { [ "$before" = PROXY ] && [ "$after" = PROXY ]; } \
-    || fail "失败的 update 扰动了代理（before=$before after=$after）"
+    || fail "失败的 update 扰动了代理（before=$before after=${after}）"
 pass "上游不可达时 update 干净失败；daemon 与代理均未受影响"

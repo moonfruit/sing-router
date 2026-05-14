@@ -20,7 +20,7 @@ sleep 3
 if rsh "kill -0 $spid 2>/dev/null"; then
     p1="$(probe)"
     note "phase1：孤儿 sing-box 存活，probe=$p1"
-    [ "$p1" = PROXY ] || note "  WARN phase1 probe=$p1（孤儿服务期预期 PROXY）"
+    [ "$p1" = PROXY ] || note "  WARN phase1 probe=${p1}（孤儿服务期预期 PROXY）"
 else
     note "phase1：sing-box 子进程未在 daemon kill -9 后存活"
 fi
