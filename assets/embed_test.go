@@ -1,6 +1,7 @@
 package assets
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -120,6 +121,37 @@ func TestReapplyRoutesShellShape(t *testing.T) {
 		"\tiptables ", "\tip6tables ", "\tipset "} {
 		if strings.Contains(s, badCmd) {
 			t.Errorf("reapply-routes.sh must NOT invoke %q", strings.TrimSpace(badCmd))
+		}
+	}
+}
+
+// TestEmbeddedShellScriptsBusyboxSleep 守护：嵌入 shell 脚本不得使用小数秒 sleep。
+// 路由器（Entware / firmware）的 sleep 多不支持 `sleep 0.2`，配合脚本里的 set -eu
+// 会在第一处小数 sleep 直接中止 —— reapply-routes.sh 曾因此在 sing-box 重启后
+// 无法补回 device-bound 默认路由（实机测试套件 D1 暴露）。
+func TestEmbeddedShellScriptsBusyboxSleep(t *testing.T) {
+	fracSleep := regexp.MustCompile(`\bsleep[[:space:]]+[0-9]*\.[0-9]`)
+	for _, p := range []string{
+		"shell/startup.sh",
+		"shell/teardown.sh",
+		"shell/reapply-routes.sh",
+		"shell/reload-cn-ipset.sh",
+		"initd/S99sing-router",
+		"firmware/koolshare/N99sing-router.sh",
+	} {
+		data, err := ReadFile(p)
+		if err != nil {
+			t.Errorf("missing %s: %v", p, err)
+			continue
+		}
+		for i, line := range strings.Split(string(data), "\n") {
+			if strings.HasPrefix(strings.TrimSpace(line), "#") {
+				continue // 注释里提到小数 sleep 不算违规
+			}
+			if fracSleep.MatchString(line) {
+				t.Errorf("%s:%d uses fractional `sleep` (busybox sleep rejects it): %q",
+					p, i+1, strings.TrimSpace(line))
+			}
 		}
 	}
 }

@@ -22,12 +22,12 @@ set -eu
 # 等待 sing-box 把新 TUN 设备真创建出来。sing-box ready check 只验
 # mixed-in 端口和 clash API；TUN inbound 建好通常稍晚一点。最多等 10s。
 i=0
-while [ "$i" -lt 50 ]; do
+while [ "$i" -lt 10 ]; do
     if ip link show "$TUN" >/dev/null 2>&1; then
         break
     fi
     i=$((i + 1))
-    sleep 0.2
+    sleep 1
 done
 
 ip route replace default dev "$TUN" table "$ROUTE_TABLE"
