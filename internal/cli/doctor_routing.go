@@ -52,7 +52,7 @@ type ipRuleLine struct {
 	IIf    string
 	OIf    string
 	FwMark string // "0x7892" 或 ""
-	Action string // "lookup main" / "lookup 111" / "goto N"
+	Action string // "lookup main" / "lookup 7890" / "goto N"
 	Raw    string
 }
 
