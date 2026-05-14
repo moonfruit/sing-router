@@ -68,8 +68,8 @@ func TestKoolshareScriptShape(t *testing.T) {
 	if !strings.HasPrefix(s, "#!/bin/sh") {
 		t.Error("missing shebang")
 	}
-	if !strings.Contains(s, "command -v sing-router") {
-		t.Error("missing entware-mount guard")
+	if !strings.Contains(s, "which sing-router") {
+		t.Error("missing entware-mount guard (must use `which`, not `command -v` — 见 TestEmbeddedShellScriptsNoCommandBuiltin)")
 	}
 	if !strings.Contains(s, "sing-router reapply-rules") {
 		t.Error("must call reapply-rules")
@@ -150,6 +150,40 @@ func TestEmbeddedShellScriptsBusyboxSleep(t *testing.T) {
 			}
 			if fracSleep.MatchString(line) {
 				t.Errorf("%s:%d uses fractional `sleep` (busybox sleep rejects it): %q",
+					p, i+1, strings.TrimSpace(line))
+			}
+		}
+	}
+}
+
+// TestEmbeddedShellScriptsNoCommandBuiltin 守护：嵌入 shell 脚本不得用 `command`
+// builtin（含 `command -v`）。路由器固件的 BusyBox（实测 1.24.1）ash 可能没编进
+// CONFIG_ASH_CMDCMD，`command -v` 会直接 "command: not found" —— 钩子里的
+// `if ! command -v sing-router` guard 因此恒为真、永远跳过（实机测试套件 R3 暴露）。
+// 改用 `which`。
+func TestEmbeddedShellScriptsNoCommandBuiltin(t *testing.T) {
+	cmdBuiltin := regexp.MustCompile(`(^|[;&|]|\bif |\b! )[[:space:]]*command[[:space:]]`)
+	for _, p := range []string{
+		"shell/startup.sh",
+		"shell/teardown.sh",
+		"shell/reapply-routes.sh",
+		"shell/reload-cn-ipset.sh",
+		"initd/S99sing-router",
+		"firmware/koolshare/N99sing-router.sh",
+		"firmware/merlin/nat-start.snippet",
+		"firmware/merlin/services-start.snippet",
+	} {
+		data, err := ReadFile(p)
+		if err != nil {
+			t.Errorf("missing %s: %v", p, err)
+			continue
+		}
+		for i, line := range strings.Split(string(data), "\n") {
+			if strings.HasPrefix(strings.TrimSpace(line), "#") {
+				continue // 注释里提到 command 不算违规
+			}
+			if cmdBuiltin.MatchString(line) {
+				t.Errorf("%s:%d uses `command` builtin (busybox 1.24.1 ash lacks it; use `which`): %q",
 					p, i+1, strings.TrimSpace(line))
 			}
 		}

@@ -230,33 +230,46 @@ crashloop_to_fatal() {
     done
 }
 
-# stage_modified_zoo : 备份 var/zoo.raw.json，追加一个无害的 direct outbound
-#   → 触发 applier 真正重启（合法、能过 check、易回滚）。rc 1 若 zoo.raw.json 不存在。
+# _rd_zoo_products : echo zoo apply 会重写的全部产物（相对 RUNDIR）。用例改了
+#   var/zoo.raw.json 触发 apply 后，必须把这几个一起还原 —— 只还原 raw 的话，
+#   残留的 config.d/zoo.json 漂移会让下一个用例的 apply 误判为有变化而重启。
+#   写成函数（而非顶层变量），避免 source 时就引用 config.sh 才有的 CONFIG_DIR。
+_rd_zoo_products() {
+    echo "var/zoo.raw.json $CONFIG_DIR/zoo.json $CONFIG_DIR/rule-set.json"
+}
+
+# snapshot_zoo : 把 zoo apply 的全部产物备份到 .testbak（不存在的文件跳过）。
+snapshot_zoo() {
+    rsh "cd $RUNDIR && for f in $(_rd_zoo_products); do [ -f \"\$f\" ] && cp \"\$f\" \"\$f.testbak\"; done; true"
+}
+
+# restore_zoo : 从 .testbak 还原 zoo apply 的全部产物（trap EXIT 用）。
+restore_zoo() {
+    rsh "cd $RUNDIR && for f in $(_rd_zoo_products); do [ -f \"\$f.testbak\" ] && mv -f \"\$f.testbak\" \"\$f\"; done; true"
+}
+
+# stage_modified_zoo : 备份 zoo 产物，给 var/zoo.raw.json 追加一个无害的 direct
+#   outbound → 触发 applier 真正重启（合法、能过 check、易回滚）。rc 1 若 raw 不存在。
 #   jq 在开发机侧执行，路由器只需 cat。
 stage_modified_zoo() {
     local raw="$RUNDIR/var/zoo.raw.json" nonce
     rsh "test -f $raw" || return 1
-    rsh "cp $raw $raw.testbak"
+    snapshot_zoo
     nonce="$(date +%s)"
     rsh "cat $raw.testbak" \
         | jq ".outbounds += [{\"type\":\"direct\",\"tag\":\"_rdtest_${nonce}\"}]" \
         | rsh "cat > $raw"
 }
 
-# stage_bad_check_zoo : 备份并写入一个 preprocess 能过、sing-box check 必失败的 zoo
-#   （selector 引用不存在的 outbound tag）。rc 1 若 zoo.raw.json 不存在。
+# stage_bad_check_zoo : 备份 zoo 产物，给 var/zoo.raw.json 追加一个 preprocess 能过、
+#   但 sing-box check 必拒的 outbound（非法 type）。rc 1 若 raw 不存在。
 stage_bad_check_zoo() {
     local raw="$RUNDIR/var/zoo.raw.json"
     rsh "test -f $raw" || return 1
-    rsh "cp $raw $raw.testbak"
+    snapshot_zoo
     rsh "cat $raw.testbak" \
-        | jq '.outbounds += [{"type":"selector","tag":"_rdtest_bad","outbounds":["does-not-exist-tag"]}]' \
+        | jq '.outbounds += [{"type":"__rdtest_bad_type__","tag":"_rdtest_bad"}]' \
         | rsh "cat > $raw"
-}
-
-# restore_zoo : 从 .testbak 还原 var/zoo.raw.json（trap EXIT 用）
-restore_zoo() {
-    rsh "test -f $RUNDIR/var/zoo.raw.json.testbak && mv -f $RUNDIR/var/zoo.raw.json.testbak $RUNDIR/var/zoo.raw.json || true"
 }
 
 # stage_checkok_runfail_box : 在 bin/sing-box.new 放一个假 sing-box
