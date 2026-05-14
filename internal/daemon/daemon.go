@@ -121,6 +121,20 @@ func Run(ctx context.Context, opts Options) error {
 		// fatal 状态保持 HTTP 存活，等待 SIGTERM 或 /shutdown
 	}
 
+	// 路由巡检：兜底外部 `kill -HUP <sing-box-pid>` 触发 sing-box reload→TUN 重建
+	// 丢掉 device-bound 路由的场景（supervisor 状态机观察不到这次"换 utun"）。
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				reportPanic("supervisor.WatchRoutes", r)
+				opts.Emitter.Fatal("recover", "panic.recovered",
+					"panic in {Name}: see stderr.log for stack",
+					map[string]any{"Name": "supervisor.WatchRoutes"})
+			}
+		}()
+		opts.Supervisor.WatchRoutes(ctx)
+	}()
+
 	// 后台跑 supervisor restart loop
 	runDone := make(chan error, 1)
 	go func() {

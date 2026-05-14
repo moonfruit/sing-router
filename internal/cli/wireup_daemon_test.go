@@ -61,6 +61,9 @@ func TestBuildSupervisorWiring_Defaults(t *testing.T) {
 	if w.StopGrace != 0 {
 		t.Fatalf("default StopGrace should be 0 (supervisor.New 内部填默认), got %v", w.StopGrace)
 	}
+	if w.RouteWatchInterval != 30*time.Second {
+		t.Fatalf("default RouteWatchInterval = %v, want 30s", w.RouteWatchInterval)
+	}
 }
 
 // daemon.toml [supervisor] 节里的覆盖必须真正生效——之前一段时间这些字段
@@ -72,6 +75,7 @@ func TestBuildSupervisorWiring_TomlOverrides(t *testing.T) {
 	dial := false
 	stopSec := 7
 	keepBackoff := 4242
+	routeWatchSec := 15
 	backoffSeq := []int{100, 200, 400}
 	w := buildSupervisorWiring(config.SupervisorConfig{
 		ReadyCheckTimeoutMs:         &tMs,
@@ -80,6 +84,7 @@ func TestBuildSupervisorWiring_TomlOverrides(t *testing.T) {
 		ReadyCheckDialInbounds:      &dial,
 		StopGraceSeconds:            &stopSec,
 		IptablesKeepWhenBackoffLtMs: &keepBackoff,
+		RouteWatchIntervalSec:       &routeWatchSec,
 		CrashPostReadyBackoffMs:     backoffSeq,
 	})
 
@@ -103,6 +108,9 @@ func TestBuildSupervisorWiring_TomlOverrides(t *testing.T) {
 	}
 	if len(w.BackoffMs) != 3 || w.BackoffMs[0] != 100 || w.BackoffMs[2] != 400 {
 		t.Fatalf("BackoffMs = %v", w.BackoffMs)
+	}
+	if w.RouteWatchInterval != 15*time.Second {
+		t.Fatalf("RouteWatchInterval = %v, want 15s", w.RouteWatchInterval)
 	}
 }
 

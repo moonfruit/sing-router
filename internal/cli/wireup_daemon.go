@@ -4,7 +4,10 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/moonfruit/sing-router/assets"
@@ -117,8 +120,31 @@ func realRunDaemon(ctx context.Context, rundir string) error {
 	startup := assets.MustReadFile("shell/startup.sh")
 	teardown := assets.MustReadFile("shell/teardown.sh")
 	reloadCNIpsetScript := assets.MustReadFile("shell/reload-cn-ipset.sh")
+	reapplyRoutesScript := assets.MustReadFile("shell/reapply-routes.sh")
 
 	wiring := buildSupervisorWiring(cfg.Supervisor)
+
+	// routeHealthy 巡检 `default dev <TUN> table <N>` 是否还在。ip 不可用（非
+	// Linux / 权限不足）时返回 true，不误报——交给 doctor 与下一轮巡检。
+	routeHealthy := func(ctx context.Context) bool {
+		out, err := exec.CommandContext(ctx, "ip", "route", "show", "table",
+			strconv.Itoa(routing.RouteTable)).Output()
+		if err != nil {
+			return true
+		}
+		for line := range strings.SplitSeq(string(out), "\n") {
+			f := strings.Fields(line)
+			if len(f) == 0 || f[0] != "default" {
+				continue
+			}
+			for i := 0; i+1 < len(f); i++ {
+				if f[i] == "dev" && f[i+1] == routing.Tun {
+					return true
+				}
+			}
+		}
+		return false
+	}
 
 	sup := daemon.New(daemon.SupervisorConfig{
 		Emitter:                 em,
@@ -147,6 +173,18 @@ func realRunDaemon(ctx context.Context, rundir string) error {
 			em.Info("shell", "shell.teardown.completed", "iptables removed", nil)
 			return nil
 		},
+		ReapplyRoutesHook: func(ctx context.Context) error {
+			em.Info("shell", "shell.reapply_routes.exec", "running reapply-routes.sh", nil)
+			if err := runner.Run(ctx, string(reapplyRoutesScript), nil); err != nil {
+				em.Warn("shell", "shell.reapply_routes.failed",
+					"reapply-routes failed: {Err}", map[string]any{"Err": err.Error()})
+				return err
+			}
+			em.Info("shell", "shell.reapply_routes.completed", "default route + fwmark rule restored", nil)
+			return nil
+		},
+		RouteHealthy:       routeHealthy,
+		RouteWatchInterval: wiring.RouteWatchInterval,
 	})
 
 	// Gitee 客户端：sync.Updater 用。缺少 token 时跳过后台同步——仍允许 daemon
@@ -247,6 +285,7 @@ type supervisorWiring struct {
 	BackoffMs               []int
 	IptablesKeepBackoffLtMs int
 	StopGrace               time.Duration
+	RouteWatchInterval      time.Duration
 }
 
 // readyCheckDialMixedPort 是 ready check 默认要 dial 的本机端口。
@@ -291,6 +330,10 @@ func buildSupervisorWiring(s config.SupervisorConfig) supervisorWiring {
 	if v := s.IptablesKeepWhenBackoffLtMs; v != nil {
 		iptablesKeepBackoff = *v
 	}
+	routeWatchInterval := 30 * time.Second
+	if v := s.RouteWatchIntervalSec; v != nil && *v > 0 {
+		routeWatchInterval = time.Duration(*v) * time.Second
+	}
 	return supervisorWiring{
 		Ready: daemon.ReadyConfig{
 			TCPDials:     dials,
@@ -301,6 +344,7 @@ func buildSupervisorWiring(s config.SupervisorConfig) supervisorWiring {
 		BackoffMs:               s.CrashPostReadyBackoffMs,
 		IptablesKeepBackoffLtMs: iptablesKeepBackoff,
 		StopGrace:               stopGrace,
+		RouteWatchInterval:      routeWatchInterval,
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"io"
 	"os/exec"
 	"strings"
+	"syscall"
 )
 
 // RunnerConfig 控制 Runner 的行为。
@@ -51,6 +52,9 @@ func (r *Runner) Run(ctx context.Context, script string, capture io.Writer) erro
 	cmd := exec.CommandContext(ctx, r.cfg.Bash, "-s")
 	cmd.Stdin = strings.NewReader(script)
 	cmd.Env = r.envSlice()
+	// 与 sing-box 同样的理由：把 shell 进程隔离到独立 pgid，shell 退出时的
+	// SIGHUP 不会半途打断 startup.sh / teardown.sh / reapply-routes.sh。
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	pr, pw := io.Pipe()
 	cmd.Stderr = pw

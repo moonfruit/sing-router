@@ -155,7 +155,7 @@ func TestSupervisorBootTimesOutWhenSingBoxStartsTooSlow(t *testing.T) {
 func TestSupervisorRestartKeepsIptables(t *testing.T) {
 	binary := fakeSingBox(t)
 	p, clash := freePort(t), freePort(t)
-	var startupCalls, teardownCalls int32
+	var startupCalls, teardownCalls, reapplyRoutesCalls int32
 	sup := New(SupervisorConfig{
 		Emitter:       newTestEmitter(t),
 		SingBoxBinary: binary,
@@ -166,14 +166,19 @@ func TestSupervisorRestartKeepsIptables(t *testing.T) {
 			TotalTimeout: 2 * time.Second,
 			Interval:     50 * time.Millisecond,
 		},
-		StartupHook:  func(context.Context) error { atomic.AddInt32(&startupCalls, 1); return nil },
-		TeardownHook: func(context.Context) error { atomic.AddInt32(&teardownCalls, 1); return nil },
-		StopGrace:    1 * time.Second,
+		StartupHook:       func(context.Context) error { atomic.AddInt32(&startupCalls, 1); return nil },
+		TeardownHook:      func(context.Context) error { atomic.AddInt32(&teardownCalls, 1); return nil },
+		ReapplyRoutesHook: func(context.Context) error { atomic.AddInt32(&reapplyRoutesCalls, 1); return nil },
+		StopGrace:         1 * time.Second,
 	})
 	if err := sup.Boot(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = sup.Shutdown(context.Background()) }()
+	// 正常 Boot 走 needHook 分支：跑 startup.sh，不应调 reapply-routes
+	if got := atomic.LoadInt32(&reapplyRoutesCalls); got != 0 {
+		t.Fatalf("reapply-routes should NOT be called on initial Boot; calls=%d", got)
+	}
 	if err := sup.Restart(context.Background()); err != nil {
 		t.Fatalf("Restart: %v", err)
 	}
@@ -183,8 +188,118 @@ func TestSupervisorRestartKeepsIptables(t *testing.T) {
 	if atomic.LoadInt32(&teardownCalls) != 0 {
 		t.Fatal("teardown should not run during user-initiated restart")
 	}
+	// Restart 走 skipStartupIfInstalled 分支：旧 utun 被 killChild 销毁，
+	// 内核已删 device-bound 路由 → supervisor 必须调 reapply-routes 重装。
+	if got := atomic.LoadInt32(&reapplyRoutesCalls); got != 1 {
+		t.Fatalf("reapply-routes should be called exactly once on Restart; calls=%d", got)
+	}
 	if !sup.IptablesInstalled() {
 		t.Fatal("iptables should remain installed across restart")
+	}
+}
+
+// 当 ReapplyRoutesHook 未提供（nil）时，supervisor 应优雅退化为旧行为：
+// Restart 仍能成功（不 panic、不 fatal），只是路由不会被自动重装。
+func TestSupervisorRestartWithoutReapplyRoutesHookStillWorks(t *testing.T) {
+	binary := fakeSingBox(t)
+	p, clash := freePort(t), freePort(t)
+	sup := New(SupervisorConfig{
+		Emitter:       newTestEmitter(t),
+		SingBoxBinary: binary,
+		SingBoxArgs:   []string{"--listen", strconv.Itoa(p), "--clash-port", strconv.Itoa(clash)},
+		ReadyConfig: ReadyConfig{
+			TCPDials:     []string{fmt.Sprintf("127.0.0.1:%d", p)},
+			ClashAPIURL:  fmt.Sprintf("http://127.0.0.1:%d/version", clash),
+			TotalTimeout: 2 * time.Second,
+			Interval:     50 * time.Millisecond,
+		},
+		StartupHook:  func(context.Context) error { return nil },
+		TeardownHook: func(context.Context) error { return nil },
+		// ReapplyRoutesHook 故意保持 nil
+		StopGrace: 1 * time.Second,
+	})
+	if err := sup.Boot(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = sup.Shutdown(context.Background()) }()
+	if err := sup.Restart(context.Background()); err != nil {
+		t.Fatalf("Restart with nil ReapplyRoutesHook: %v", err)
+	}
+	if sup.State() != StateRunning {
+		t.Fatalf("state: %v want StateRunning", sup.State())
+	}
+}
+
+// 外部 `kill -HUP <sing-box-pid>` 会让 sing-box reload→TUN 重建→内核删
+// device-bound 路由，但 supervisor 状态机观察不到（pid 没变、子进程没退）。
+// WatchRoutes 巡检到 RouteHealthy=false 时必须调 ReapplyRoutesHook 补回。
+func TestSupervisorWatchRoutesReappliesWhenRouteMissing(t *testing.T) {
+	binary := fakeSingBox(t)
+	p, clash := freePort(t), freePort(t)
+	var reapplyRoutesCalls int32
+	var routeOK atomic.Bool
+	routeOK.Store(false) // 模拟路由被 sing-box reload 删掉
+	sup := New(SupervisorConfig{
+		Emitter:       newTestEmitter(t),
+		SingBoxBinary: binary,
+		SingBoxArgs:   []string{"--listen", strconv.Itoa(p), "--clash-port", strconv.Itoa(clash)},
+		ReadyConfig: ReadyConfig{
+			TCPDials:     []string{fmt.Sprintf("127.0.0.1:%d", p)},
+			ClashAPIURL:  fmt.Sprintf("http://127.0.0.1:%d/version", clash),
+			TotalTimeout: 2 * time.Second,
+			Interval:     50 * time.Millisecond,
+		},
+		StartupHook:        func(context.Context) error { return nil },
+		TeardownHook:       func(context.Context) error { return nil },
+		ReapplyRoutesHook:  func(context.Context) error { atomic.AddInt32(&reapplyRoutesCalls, 1); return nil },
+		RouteHealthy:       func(context.Context) bool { return routeOK.Load() },
+		RouteWatchInterval: 20 * time.Millisecond,
+		StopGrace:          1 * time.Second,
+	})
+	if err := sup.Boot(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = sup.Shutdown(context.Background()) }()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go sup.WatchRoutes(ctx)
+
+	// 路由缺失 → 至少被补一次
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if atomic.LoadInt32(&reapplyRoutesCalls) > 0 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if atomic.LoadInt32(&reapplyRoutesCalls) == 0 {
+		t.Fatal("WatchRoutes should call ReapplyRoutesHook while route is missing")
+	}
+
+	// 路由恢复后 → 不再调用
+	routeOK.Store(true)
+	time.Sleep(60 * time.Millisecond) // 让在途的一次跑完
+	stable := atomic.LoadInt32(&reapplyRoutesCalls)
+	time.Sleep(100 * time.Millisecond)
+	if got := atomic.LoadInt32(&reapplyRoutesCalls); got != stable {
+		t.Fatalf("WatchRoutes should stop reapplying once route is healthy; calls %d→%d", stable, got)
+	}
+}
+
+// RouteHealthy 为 nil 时 WatchRoutes 必须立即返回（watcher 禁用），不阻塞。
+func TestSupervisorWatchRoutesDisabledWhenRouteHealthyNil(t *testing.T) {
+	sup := New(SupervisorConfig{
+		Emitter:           newTestEmitter(t),
+		ReapplyRoutesHook: func(context.Context) error { return nil },
+		// RouteHealthy 故意保持 nil
+	})
+	done := make(chan struct{})
+	go func() { sup.WatchRoutes(context.Background()); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("WatchRoutes should return immediately when RouteHealthy is nil")
 	}
 }
 

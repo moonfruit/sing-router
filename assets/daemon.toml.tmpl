@@ -39,6 +39,8 @@ include_stack   = false
 # crash_post_ready_backoff_ms     = [1000, 2000, 4000, 8000, 16000, 32000, 64000, 128000, 256000, 512000, 600000]
 # iptables_keep_when_backoff_lt_ms = 10000
 # stop_grace_seconds              = 5
+# route_watch_interval_sec        = 30   # 周期巡检 `default dev <TUN> table N`，
+#                                        # 兜底外部 kill -HUP sing-box 触发的 TUN 重建丢路由
 
 [zoo]
 extract_keys              = ["outbounds", "route.rules", "route.rule_set", "route.final"]

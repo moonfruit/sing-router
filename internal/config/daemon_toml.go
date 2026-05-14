@@ -59,6 +59,7 @@ type SupervisorConfig struct {
 	CrashPostReadyBackoffMs     []int  `toml:"crash_post_ready_backoff_ms"`
 	IptablesKeepWhenBackoffLtMs *int   `toml:"iptables_keep_when_backoff_lt_ms"`
 	StopGraceSeconds            *int   `toml:"stop_grace_seconds"`
+	RouteWatchIntervalSec       *int   `toml:"route_watch_interval_sec"`
 }
 
 type ZooConfig struct {
