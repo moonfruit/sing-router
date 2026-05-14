@@ -134,6 +134,14 @@ route_table_has_default() { rsh "ip route show table $ROUTE_TABLE 2>/dev/null | 
 # ipset_cn_exists : rc 0 若 'cn' ipset 存在
 ipset_cn_exists() { rsh "ipset list cn >/dev/null 2>&1"; }
 
+# iprule_table_count : 打印当前指向 $ROUTE_TABLE 的策略路由规则条数。
+#   ip rule add 不幂等，多次 boot/restart/HUP 会累积重复条目 —— 这个计数用来
+#   观察累积、并断言 teardown 是否把它们全清掉。grep -c 无匹配时打印 0 且退出
+#   非 0，|| true 兜住。
+iprule_table_count() {
+    rsh "ip rule 2>/dev/null | grep -c 'lookup $ROUTE_TABLE' || true"
+}
+
 # assert_rules_absent : rc 0 当 iptables 链 / 策略路由 / ipset 全部已拆净
 assert_rules_absent() {
     local bad=0
