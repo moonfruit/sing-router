@@ -31,13 +31,14 @@
 >
 > **瞬时过渡窗口允许存在，但必须「有界」且「量化」（给出实测时长上限）。**
 
-三态判定（见 §7 探针参考实现）：
+三态判定（见 §7 探针参考实现）：从 LAN 客户端分别探测 baidu（直连基准）与 google（代理验证），组合 iptables 真值得出状态：
 
-| 状态 | LAN 客户端可达 | iptables `sing-box` 链 / 路由表 | 结论 |
-|---|---|---|---|
-| 代理通 | ✅ | 存在 + sing-box 在监听 | PASS |
-| 直连通 | ✅ | 已拆净 | PASS |
-| **黑洞** | ❌（超时 / 拒绝） | 存在但无监听 | **FAIL** |
+| 状态 | baidu（直连基准）| google（代理验证）| iptables `sing-box` 链 | 结论 |
+|---|---|---|---|---|
+| 代理通 | ✅ | ✅ | 存在 | PASS |
+| 直连通 | ✅ | ❌ | 已拆净 | PASS |
+| **黑洞** | ❌（超时 / 拒绝） | — | 仍存在但无监听 | **FAIL** |
+| WAN 断 | ❌ | — | 已拆净 | 环境问题，非被测对象 |
 
 过渡窗口的 PASS 条件：窗口有明确终点（最终收敛到代理通或直连通），且实测时长被记录、在文档中评估为可接受或登记为待优化项。
 
@@ -46,7 +47,7 @@
 - **目标固件**：koolshare 为主；merlin 差异在相关用例内单列。
 - **SSH 通道**：会话内提供可直达路由器的 SSH 别名 / 凭证，Claude Code 经 `ssh <router> '...'` 执行命令并读取输出做断言。
 - **统一前置条件**：每个用例开始前，服务必须处于 `state=running`、代理通（探针确认）。用例结束后需将环境恢复到该状态。
-- **三态探针**：路由器本机 `curl` + 一个 LAN 侧客户端 `curl` / `ping`，见 §7。
+- **三态探针**：从 LAN 客户端（`192.168.50.12`）分别探测 `https://www.baidu.com`（直连基准，任意时刻都应通）与 `https://www.google.com`（仅 sing-box 代理正常时可通），见 §7。路由器经 `192.168.50.1` 操控。
 - **观测手段**（只读，不作被测对象）：
   - `sing-router status [--json]` —— 状态机、daemon pid、sing-box pid
   - `iptables -t nat -nL sing-box` / `iptables -t nat -nL sing-box-dns` / `iptables -t mangle -nL sing-box-mark`
@@ -348,31 +349,31 @@
 
 ## 7. 三态探针参考实现
 
-探针目标：一次调用判定当前处于 代理通 / 直连通 / 黑洞。
+探针分两层：**连通性层**在 LAN 客户端（`192.168.50.12`）上分别请求两个目标；**判定层**在开发机侧组合两个结果 + 路由器 iptables 真值得出三态。
 
 ```sh
-# probe.sh —— 在 LAN 客户端或路由器本机执行
-# 出参：PROXY / DIRECT / BLACKHOLE
-probe() {
-    # 1. 连通性：能否在 5s 内拿到 generate_204
-    code=$(curl -s -m 5 -o /dev/null -w '%{http_code}' \
-        http://www.gstatic.com/generate_204 2>/dev/null)
-    if [ "$code" != "204" ]; then
-        echo BLACKHOLE        # 不通 = 黑洞（前提：直连本身可用）
-        return
-    fi
-    # 2. 区分代理 vs 直连：iptables sing-box 链是否存在
-    if iptables -t nat -nL sing-box >/dev/null 2>&1; then
-        echo PROXY            # 通 + 规则在 = 代理通
-    else
-        echo DIRECT           # 通 + 规则不在 = 干净直连
-    fi
+# probe.sh —— 经 `ssh 192.168.50.12 sh -s` 在 LAN 客户端上执行
+# 出参：一行两个 token "<direct> <proxy>"，各为 OK 或 FAIL
+#   direct = https://www.baidu.com  任意时刻都应通；FAIL 即「黑洞/断网」信号
+#   proxy  = https://www.google.com 仅 sing-box 代理正常时可通
+_check() {  # <url> -> OK|FAIL
+    if curl -sS -m "${TIMEOUT:-5}" -o /dev/null "$1" 2>/dev/null
+    then echo OK; else echo FAIL; fi
 }
+echo "$(_check https://www.baidu.com) $(_check https://www.google.com)"
 ```
 
-窗口量化：故障注入后以 ≤ 0.5s 间隔循环调用 `probe`，记录 `BLACKHOLE` 的连续持续时长，即为该场景的过渡窗口实测值。
+```
+# 判定层（开发机侧）：classify <direct> <proxy> <rules_present_rc>
+#   direct=OK  + proxy=OK            → PROXY      代理通
+#   direct=OK  + proxy=FAIL          → DIRECT     干净直连
+#   direct=FAIL + iptables 链仍在    → BLACKHOLE  黑洞（FAIL）
+#   direct=FAIL + iptables 链已拆    → WANDOWN    WAN 本身断（环境问题）
+```
 
-> 注：探针需先确认「直连本身可用」（路由器 WAN 正常），否则无法区分黑洞与上游故障。每个用例执行前由前置条件保证。
+窗口量化：故障注入后尽快循环调用探针，记录 `BLACKHOLE` 的连续持续时长，即为该场景的过渡窗口实测值。
+
+> 注：baidu 这一路本身就是「直连基准」—— 它在任意时刻都应可达，所以 baidu FAIL 直接等价于「流量被打断」。无需额外假设「直连可用」，探针自带这个基准。开发机须与 LAN 客户端同网段，使探针 ssh 不经 WAN，路由器黑洞时仍能下发探针。
 
 ## 8. 待评审 / 开放问题
 
