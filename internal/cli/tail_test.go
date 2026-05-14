@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"io"
 	"os"
@@ -239,6 +240,69 @@ func TestFollowName_HandlesTruncate(t *testing.T) {
 	mu.Lock()
 	defer mu.Unlock()
 	if len(got) == 0 || got[len(got)-1] != "fresh" {
+		t.Fatalf("got %v", got)
+	}
+}
+
+func collectEmitLastN(t *testing.T, content string, n int) []string {
+	t.Helper()
+	var out []string
+	if err := EmitLastN(strings.NewReader(content), n, func(b []byte) {
+		out = append(out, string(b))
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+func TestEmitLastN(t *testing.T) {
+	const five = "a\nb\nc\nd\ne\n"
+	cases := []struct {
+		name    string
+		content string
+		n       int
+		want    []string
+	}{
+		{"fewer than total", five, 2, []string{"d", "e"}},
+		{"equal to total", five, 5, []string{"a", "b", "c", "d", "e"}},
+		{"more than total", five, 10, []string{"a", "b", "c", "d", "e"}},
+		{"n zero means all", five, 0, []string{"a", "b", "c", "d", "e"}},
+		{"n negative means all", five, -1, []string{"a", "b", "c", "d", "e"}},
+		{"empty input", "", 3, nil},
+		{"no trailing newline", "a\nb\nc", 2, []string{"b", "c"}},
+		{"single line no newline", "solo", 1, []string{"solo"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := collectEmitLastN(t, tc.content, tc.n)
+			if !equalSlice(got, tc.want) {
+				t.Fatalf("got %v want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestEmitLastN_GzipStream(t *testing.T) {
+	var buf bytes.Buffer
+	gw := gzip.NewWriter(&buf)
+	if _, err := gw.Write([]byte("one\ntwo\nthree\nfour\n")); err != nil {
+		t.Fatal(err)
+	}
+	if err := gw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	gr, err := gzip.NewReader(&buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = gr.Close() }()
+
+	var got []string
+	if err := EmitLastN(gr, 2, func(b []byte) { got = append(got, string(b)) }); err != nil {
+		t.Fatal(err)
+	}
+	if !equalSlice(got, []string{"three", "four"}) {
 		t.Fatalf("got %v", got)
 	}
 }

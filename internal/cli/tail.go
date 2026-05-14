@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
@@ -93,6 +94,32 @@ func EmitLines(r io.Reader, emit LineEmit) error {
 			return err
 		}
 	}
+}
+
+// EmitLastN 从 r 流式读取按 \n 分隔的行，只把最后 n 行按原序交给 emit。
+// n <= 0 视为「全部」，等价于 EmitLines。
+// 用于无法反向 seek 的输入（如 gzip 解压流）：以容量 n 的环形缓冲持有最后 n 行。
+func EmitLastN(r io.Reader, n int, emit LineEmit) error {
+	if n <= 0 {
+		return EmitLines(r, emit)
+	}
+	ring := make([][]byte, n)
+	count := 0
+	if err := EmitLines(r, func(line []byte) {
+		// EmitLines 的切片不可长期持有（见 LineEmit 注释），必须复制。
+		ring[count%n] = slices.Clone(line)
+		count++
+	}); err != nil {
+		return err
+	}
+	start := 0
+	if count > n {
+		start = count - n
+	}
+	for i := start; i < count; i++ {
+		emit(ring[i%n])
+	}
+	return nil
 }
 
 // FollowConfig 控制 follow 行为。

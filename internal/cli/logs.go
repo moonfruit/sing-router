@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"compress/gzip"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -47,6 +48,9 @@ By default the last 200 lines are rendered. Use --all to render the whole file, 
 -n N to pick a specific number. -f follows the open fd (stop on rotate); -F follows
 the path (handle rotate / truncate / re-create).
 
+A FILE ending in .gz (e.g. a rotated log/sing-router.log.1.gz) is transparently
+decompressed; -f / -F are ignored for .gz files since archived logs don't grow.
+
 Lines that don't parse as CLEF JSON (e.g. Go runtime panic stacks in stderr.log)
 pass through verbatim.`,
 		Args: cobra.MaximumNArgs(1),
@@ -90,6 +94,18 @@ pass through verbatim.`,
 			if all {
 				startN = 0
 			}
+
+			// .gz：透明解压。gzip 是前向流，无法反向 seek，故用 EmitLastN
+			// 流式取最后 N 行；直接 return，天然跳过下面的 follow（归档日志不增长）。
+			if strings.HasSuffix(path, ".gz") {
+				gr, err := gzip.NewReader(f)
+				if err != nil {
+					return fmt.Errorf("open gzip %s: %w", path, err)
+				}
+				defer func() { _ = gr.Close() }()
+				return EmitLastN(gr, startN, renderer.emit)
+			}
+
 			if _, err := SeekToLastN(f, startN); err != nil {
 				return err
 			}
