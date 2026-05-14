@@ -18,7 +18,10 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 . "$HERE/../lib/harness.sh"
 
 require_running
-trap restore_to_running EXIT
+# part 2 会在 daemon 仍 running 时手工种入重复 ip rule。若用例在 part 2/3 之间提前
+# 退出，restore_to_running 见状态 running 即 no-op，种入的规则会残留。trap 里强制
+# restart 一轮：stop 的 teardown 循环删除清掉全部累积，start 的 startup 幂等装回一条。
+trap 'rsh "$SINGROUTER restart" >/dev/null 2>&1 || true; restore_to_running' EXIT
 
 before="$(iprule_table_count)"
 note "起始：指向 table $ROUTE_TABLE 的 ip rule = ${before}"
