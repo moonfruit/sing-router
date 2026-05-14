@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -391,6 +392,120 @@ func TestSupervisorAutoRestartUnderCrash(t *testing.T) {
 
 	if preShutdownTeardown != 0 {
 		t.Fatal("teardown should not be invoked when backoff < threshold")
+	}
+}
+
+// Bug A 回归：Restart 经 HTTP 触发时，调用方传的是 r.Context()（请求级 ctx）。
+// sing-box 子进程的生命周期绝不能绑在这个 ctx 上 —— 否则 HTTP 请求一结束，
+// exec.CommandContext 就会 SIGKILL 掉刚起的 sing-box。子进程应绑 daemon 级 ctx
+// （Boot 时捕获），调用方 ctx 取消后子进程必须仍存活。
+func TestSupervisorRestartChildOutlivesCallerContext(t *testing.T) {
+	binary := fakeSingBox(t)
+	p, clash := freePort(t), freePort(t)
+	sup := New(SupervisorConfig{
+		Emitter:       newTestEmitter(t),
+		SingBoxBinary: binary,
+		SingBoxArgs:   []string{"--listen", strconv.Itoa(p), "--clash-port", strconv.Itoa(clash)},
+		ReadyConfig: ReadyConfig{
+			TCPDials:     []string{fmt.Sprintf("127.0.0.1:%d", p)},
+			ClashAPIURL:  fmt.Sprintf("http://127.0.0.1:%d/version", clash),
+			TotalTimeout: 2 * time.Second,
+			Interval:     50 * time.Millisecond,
+		},
+		StartupHook:       func(context.Context) error { return nil },
+		TeardownHook:      func(context.Context) error { return nil },
+		ReapplyRoutesHook: func(context.Context) error { return nil },
+		StopGrace:         1 * time.Second,
+	})
+	// Boot 用 daemon 级 ctx（这里用 Background 模拟，永不取消）。
+	if err := sup.Boot(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = sup.Shutdown(context.Background()) }()
+
+	// 模拟 HTTP 触发的 Restart：传一个请求级 ctx（= r.Context()）。
+	reqCtx, reqCancel := context.WithCancel(context.Background())
+	if err := sup.Restart(reqCtx); err != nil {
+		t.Fatalf("Restart: %v", err)
+	}
+	pid := sup.SingBoxPID()
+	if pid == 0 {
+		t.Fatal("sing-box pid should be non-zero after Restart")
+	}
+	// HTTP 请求结束 → r.Context() 取消。sing-box 不应因此被杀。
+	reqCancel()
+	time.Sleep(300 * time.Millisecond)
+
+	if err := syscall.Kill(pid, 0); err != nil {
+		t.Fatalf("sing-box (pid %d) must stay alive after caller ctx cancelled, but: %v", pid, err)
+	}
+	if sup.State() != StateRunning {
+		t.Fatalf("state after caller-ctx cancel: %v want StateRunning", sup.State())
+	}
+}
+
+// Bug B 回归：Restart 把状态切到 Reloading 后才 killChild，Run() 监控循环醒来
+// 时若直接因 "state != Running" 就 return，整个监控循环就永久退出，Restart 起的
+// 新子进程从此裸奔。这里验证：一次 Restart 之后，外部杀掉新子进程，Run() 仍能
+// 检测到崩溃并退避重启出一个新的、running 的子进程。
+func TestSupervisorRunKeepsMonitoringAfterRestart(t *testing.T) {
+	binary := fakeSingBox(t)
+	p, clash := freePort(t), freePort(t)
+	sup := New(SupervisorConfig{
+		Emitter:       newTestEmitter(t),
+		SingBoxBinary: binary,
+		SingBoxArgs:   []string{"--listen", strconv.Itoa(p), "--clash-port", strconv.Itoa(clash)},
+		ReadyConfig: ReadyConfig{
+			TCPDials:     []string{fmt.Sprintf("127.0.0.1:%d", p)},
+			ClashAPIURL:  fmt.Sprintf("http://127.0.0.1:%d/version", clash),
+			TotalTimeout: 2 * time.Second,
+			Interval:     50 * time.Millisecond,
+		},
+		StartupHook:       func(context.Context) error { return nil },
+		TeardownHook:      func(context.Context) error { return nil },
+		ReapplyRoutesHook: func(context.Context) error { return nil },
+		BackoffMs:         []int{50, 100, 200},
+		StopGrace:         1 * time.Second,
+	})
+	if err := sup.Boot(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runDone := make(chan error, 1)
+	go func() { runDone <- sup.Run(ctx) }()
+
+	// 一次用户触发的 Restart（模拟 /api/v1/restart）。
+	if err := sup.Restart(context.Background()); err != nil {
+		t.Fatalf("Restart: %v", err)
+	}
+	pidAfterRestart := sup.SingBoxPID()
+	if pidAfterRestart == 0 {
+		t.Fatal("pid 0 after Restart")
+	}
+
+	// 「外部」杀掉 Restart 起的新子进程，模拟崩溃。Run() 必须还在监控。
+	if err := syscall.Kill(pidAfterRestart, syscall.SIGKILL); err != nil {
+		t.Fatalf("kill child: %v", err)
+	}
+
+	// Run() 应检测到崩溃 → 退避重启 → 出现新 pid 且回到 running。
+	deadline := time.Now().Add(3 * time.Second)
+	recovered := false
+	for time.Now().Before(deadline) {
+		if pid := sup.SingBoxPID(); pid != 0 && pid != pidAfterRestart && sup.State() == StateRunning {
+			recovered = true
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	cancel()
+	<-runDone
+	_ = sup.Shutdown(context.Background())
+
+	if !recovered {
+		t.Fatalf("Run() must keep monitoring after Restart: child crash went unrecovered "+
+			"(state=%v pid=%d, pidAfterRestart=%d)", sup.State(), sup.SingBoxPID(), pidAfterRestart)
 	}
 }
 
