@@ -2,7 +2,7 @@
 # S4 daemon 被 kill -9（最坏情况）：拷问孤儿 sing-box 链 —— 孤儿后续崩溃是否黑洞。
 # 本用例是「特征刻画」型：完成刻画即 PASS，黑洞结论以 note 显著标出（见 spec §8）。
 set -u
-CASE_ID="S4"
+export CASE_ID="S4"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 . "$HERE/../config.sh"
 . "$HERE/../lib/harness.sh"

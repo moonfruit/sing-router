@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # S3 daemon 收 SIGTERM → 子进程被收掉 + 规则全清 → 直连通
 set -u
-CASE_ID="S3"
+export CASE_ID="S3"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 . "$HERE/../config.sh"
 . "$HERE/../lib/harness.sh"

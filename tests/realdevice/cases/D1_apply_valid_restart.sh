@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # D1 sync 拉到健康的新 zoo → applier check 通过 → restart → 代理通
 set -u
-CASE_ID="D1"
+export CASE_ID="D1"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 . "$HERE/../config.sh"
 . "$HERE/../lib/harness.sh"

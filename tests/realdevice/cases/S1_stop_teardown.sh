@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # S1 正常 stop → teardown 全清 → 直连通
 set -u
-CASE_ID="S1"
+export CASE_ID="S1"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 . "$HERE/../config.sh"
 . "$HERE/../lib/harness.sh"

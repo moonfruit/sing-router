@@ -2,7 +2,7 @@
 # R3 koolshare nat-start 钩子链路：模拟 WAN 重拨（flush nat + 调 N99 钩子）→ 代理恢复
 # 真实 WAN 重拨（拔网线）为手动变体；本用例自动化模拟钩子链路本身。
 set -u
-CASE_ID="R3"
+export CASE_ID="R3"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 . "$HERE/../config.sh"
 . "$HERE/../lib/harness.sh"

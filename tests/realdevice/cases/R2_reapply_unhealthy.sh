@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # R2 sing-box 不健康时 reapply-rules → 必须失败且不留半套规则（黑洞）
 set -u
-CASE_ID="R2"
+export CASE_ID="R2"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 . "$HERE/../config.sh"
 . "$HERE/../lib/harness.sh"

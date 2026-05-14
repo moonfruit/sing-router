@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # D5 拉到的资源通不过 sing-box check → applier revert → 不重启 → 旧配置全程不中断
 set -u
-CASE_ID="D5"
+export CASE_ID="D5"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 . "$HERE/../config.sh"
 . "$HERE/../lib/harness.sh"

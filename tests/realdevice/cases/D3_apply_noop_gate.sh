@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # D3 无资源变化时 POST /apply → sha256 闸门 no-op → 不触发任何 restart 窗口
 set -u
-CASE_ID="D3"
+export CASE_ID="D3"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 . "$HERE/../config.sh"
 . "$HERE/../lib/harness.sh"

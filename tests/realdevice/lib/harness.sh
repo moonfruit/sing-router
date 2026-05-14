@@ -162,6 +162,7 @@ measure_blackhole_ms() {
     elapsed=$(( $(date +%s) - start ))
     total="$(echo "$samples" | wc -w | tr -d ' ')"
     [ "$total" -gt 0 ] || { echo 0; return; }
+    # shellcheck disable=SC2086  # $samples 必须按空格拆成多个参数
     runs="$(max_contiguous_blackhole $samples)"
     echo $(( runs * elapsed * 1000 / total ))
 }
@@ -179,6 +180,7 @@ measure_route_gone_ms() {
     elapsed=$(( $(date +%s) - start ))
     total="$(echo "$samples" | wc -w | tr -d ' ')"
     [ "$total" -gt 0 ] || { echo 0; return; }
+    # shellcheck disable=SC2086  # $samples 必须按空格拆成多个参数
     runs="$(max_contiguous GONE $samples)"
     echo $(( runs * elapsed * 1000 / total ))
 }

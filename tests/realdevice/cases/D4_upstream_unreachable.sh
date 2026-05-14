@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # D4 上游不可达 → sync/update 失败仅报错 → daemon 主流程与代理持续可用
 set -u
-CASE_ID="D4"
+export CASE_ID="D4"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 . "$HERE/../config.sh"
 . "$HERE/../lib/harness.sh"
@@ -15,7 +15,7 @@ block_host "$GITEE_HOST" || skip "无法解析/封锁 $GITEE_HOST"
 before="$(probe)"
 
 out="$(rsh "$SINGROUTER update all" 2>&1)"; rc=$?
-note "update rc=$rc"
+note "update rc=$rc out=[$out]"
 [ "$rc" -ne 0 ] || note "WARN update 在封锁下仍返回 0（可能 token 为空或命中缓存）"
 sleep 2
 

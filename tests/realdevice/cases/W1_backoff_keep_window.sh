@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # W1 崩溃退避 <10s 保留 iptables 的窗口 —— 量化黑洞时长
 set -u
-CASE_ID="W1"
+export CASE_ID="W1"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 . "$HERE/../config.sh"
 . "$HERE/../lib/harness.sh"

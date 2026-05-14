@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # D6 资源过 check 但 sing-box run 失败 → applier revert + RecoverFromFailedApply 用旧配置拉回
 set -u
-CASE_ID="D6"
+export CASE_ID="D6"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 . "$HERE/../config.sh"
 . "$HERE/../lib/harness.sh"
@@ -10,7 +10,6 @@ require_running
 trap 'restore_box; restore_to_running' EXIT
 
 stage_checkok_runfail_box || fail "无法在 bin/sing-box.new 放置假 sing-box"
-old="$(singbox_pid)"
 note "POST /apply 一个 check 过 / run 失败的 sing-box —— 预期 revert + recover 回旧配置"
 tmp="$(mktemp)"
 ( apply_via_api > "$tmp" 2>&1 ) &

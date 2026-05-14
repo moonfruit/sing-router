@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # S2 sing-box 反复崩溃 → StateFatal → iptables 已拆净 → 直连通
 set -u
-CASE_ID="S2"
+export CASE_ID="S2"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 . "$HERE/../config.sh"
 . "$HERE/../lib/harness.sh"

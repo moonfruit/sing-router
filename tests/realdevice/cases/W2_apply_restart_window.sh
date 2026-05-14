@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # W2 资源更新触发 applier restart 的窗口（不拆 iptables，ready-check 最长 60s）—— 最大风险点
 set -u
-CASE_ID="W2"
+export CASE_ID="W2"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 . "$HERE/../config.sh"
 . "$HERE/../lib/harness.sh"

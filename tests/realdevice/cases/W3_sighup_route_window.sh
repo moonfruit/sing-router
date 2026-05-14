@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # W3 kill -HUP sing-box → TUN/路由重建，WatchRoutes(默认30s) 补回 —— 量化路由缺失窗口
 set -u
-CASE_ID="W3"
+export CASE_ID="W3"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 . "$HERE/../config.sh"
 . "$HERE/../lib/harness.sh"

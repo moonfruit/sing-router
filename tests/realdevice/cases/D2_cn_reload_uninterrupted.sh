@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # D2 sync 拉到新 cn.txt → reload-cn-ipset 轻量重载 → 全程不中断、不重启
 set -u
-CASE_ID="D2"
+export CASE_ID="D2"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 . "$HERE/../config.sh"
 . "$HERE/../lib/harness.sh"

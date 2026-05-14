@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # S5 sing-box 子进程被 kill -9、daemon 健在 → supervisor 退避重启 → 回到代理通
 set -u
-CASE_ID="S5"
+export CASE_ID="S5"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 . "$HERE/../config.sh"
 . "$HERE/../lib/harness.sh"

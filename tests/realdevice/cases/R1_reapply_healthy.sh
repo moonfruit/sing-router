@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # R1 sing-box 健在时 reapply-rules：规则装回、代理恢复
 set -u
-CASE_ID="R1"
+export CASE_ID="R1"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 . "$HERE/../config.sh"
 . "$HERE/../lib/harness.sh"

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # W4 supervisor.Restart 快速重启路径窗口（sing-router restart）—— 与 W2 对比
 set -u
-CASE_ID="W4"
+export CASE_ID="W4"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 . "$HERE/../config.sh"
 . "$HERE/../lib/harness.sh"
