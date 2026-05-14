@@ -28,7 +28,7 @@ done
 mid="$(iprule_table_count)"
 note "3 次 restart 后：ip rule 条数 = $mid"
 [ "$mid" -gt "$before" ] \
-    || skip "ip rule 条数未增长（$before→$mid）—— 该平台 ip rule add 可能幂等，本用例不适用"
+    || skip "ip rule 条数未增长（${before}→${mid}）—— 该平台 ip rule add 可能幂等，本用例不适用"
 
 note "stop daemon → teardown 跑 ip rule 删除"
 rsh "$SINGROUTER stop" >/dev/null 2>&1 || true
@@ -39,4 +39,4 @@ after="$(iprule_table_count)"
 note "teardown 后：ip rule 条数 = $after"
 [ "$after" -eq 0 ] \
     || fail "teardown 后仍残留 $after 条指向 table $ROUTE_TABLE 的 ip rule —— 循环删除未生效"
-pass "ip rule 累积 $before→$mid，teardown 循环删除清净至 0"
+pass "ip rule 累积 ${before}→${mid}，teardown 循环删除清净至 0"
