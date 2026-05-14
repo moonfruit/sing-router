@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -54,6 +55,9 @@ func TestAPIStatusReturnsJSON(t *testing.T) {
 	daemon := body["daemon"].(map[string]any)
 	if daemon["version"] != "test-1.0" {
 		t.Fatalf("version: %v", daemon["version"])
+	}
+	if pid, ok := daemon["pid"].(float64); !ok || int(pid) != os.Getpid() {
+		t.Fatalf("pid: %v (want %d)", daemon["pid"], os.Getpid())
 	}
 }
 

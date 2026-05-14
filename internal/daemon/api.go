@@ -3,7 +3,9 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/moonfruit/sing2seq/clef"
@@ -166,6 +168,7 @@ func (deps APIDeps) statusSnapshot() map[string]any {
 	snap := map[string]any{
 		"daemon": map[string]any{
 			"version":  deps.Version,
+			"pid":      os.Getpid(),
 			"rundir":   deps.Rundir,
 			"state":    sup.State().String(),
 			"log_file": deps.LogFile,
@@ -179,9 +182,7 @@ func (deps APIDeps) statusSnapshot() map[string]any {
 		},
 	}
 	if deps.StatusExtra != nil {
-		for k, v := range deps.StatusExtra() {
-			snap[k] = v
-		}
+		maps.Copy(snap, deps.StatusExtra())
 	}
 	return snap
 }

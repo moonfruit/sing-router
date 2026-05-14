@@ -396,10 +396,3 @@ func (s *Supervisor) WatchRoutes(ctx context.Context) {
 		_ = s.cfg.ReapplyRoutesHook(ctx)
 	}
 }
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}

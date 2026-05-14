@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"maps"
 	"strings"
 	"testing"
 
@@ -305,9 +306,7 @@ func chainCmds(extra map[string]cmdResult) map[string]cmdResult {
 		"iptables -t nat -S sing-box-dns":        {out: fixtureSubChainDNS, code: 0},
 		"iptables -t mangle -S sing-box-mark":    {out: fixtureSubChainMark, code: 0},
 	}
-	for k, v := range extra {
-		base[k] = v
-	}
+	maps.Copy(base, extra)
 	return base
 }
 

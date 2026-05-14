@@ -82,7 +82,7 @@ type interfererTarget struct {
 
 func parseIPRules(out string) []ipRuleLine {
 	var rules []ipRuleLine
-	for _, line := range strings.Split(out, "\n") {
+	for line := range strings.SplitSeq(out, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
@@ -144,7 +144,7 @@ func parseIPRules(out string) []ipRuleLine {
 
 func parseIPRoutes(out string) []ipRouteLine {
 	var routes []ipRouteLine
-	for _, line := range strings.Split(out, "\n") {
+	for line := range strings.SplitSeq(out, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
@@ -170,7 +170,7 @@ func parseIPRoutes(out string) []ipRouteLine {
 func parseIptablesS(out string) []iptRule {
 	var rules []iptRule
 	idx := 0
-	for _, line := range strings.Split(out, "\n") {
+	for line := range strings.SplitSeq(out, "\n") {
 		line = strings.TrimSpace(line)
 		if !strings.HasPrefix(line, "-A ") {
 			continue
@@ -223,14 +223,14 @@ func parsePortSpec(s string) []portSpec {
 		return nil
 	}
 	var specs []portSpec
-	for _, part := range strings.Split(s, ",") {
+	for part := range strings.SplitSeq(s, ",") {
 		part = strings.TrimSpace(part)
 		if part == "" {
 			continue
 		}
-		if i := strings.Index(part, ":"); i >= 0 {
-			lo, err1 := strconv.Atoi(strings.TrimSpace(part[:i]))
-			hi, err2 := strconv.Atoi(strings.TrimSpace(part[i+1:]))
+		if lhs, rhs, ok := strings.Cut(part, ":"); ok {
+			lo, err1 := strconv.Atoi(strings.TrimSpace(lhs))
+			hi, err2 := strconv.Atoi(strings.TrimSpace(rhs))
 			if err1 == nil && err2 == nil {
 				specs = append(specs, portSpec{lo, hi})
 			}
