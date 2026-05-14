@@ -8,7 +8,7 @@
 - [ ] 设备白名单/黑名单
   - [ ] 自动化
 - [ ] stderr.log -> sing-router.err
-- [x] router table: 111 -> 7890
+- [x] router table: 111 -> 7890 -> 7892
 - [ ] 清理 daemon.toml 中不再使用的字段
 
 ## bug fix

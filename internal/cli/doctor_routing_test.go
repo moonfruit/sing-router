@@ -162,7 +162,7 @@ func TestCidrOverlap(t *testing.T) {
 
 func TestCheckIPRule_Pass(t *testing.T) {
 	stubRunReadOnly(t, map[string]cmdResult{
-		"ip rule list": {out: "0:\tfrom all lookup local\n32765:\tfrom all fwmark 0x7892 lookup 7890\n32766:\tfrom all lookup main\n", code: 0},
+		"ip rule list": {out: "0:\tfrom all lookup local\n32765:\tfrom all fwmark 0x7892 lookup 7892\n32766:\tfrom all lookup main\n", code: 0},
 	})
 	r := config.DefaultRouting()
 	checks := checkIPRule(r)
@@ -190,7 +190,7 @@ func TestCheckIPRule_CatchAllBeforeOursWarns(t *testing.T) {
 		"ip rule list": {
 			out: "0:\tfrom all lookup local\n" +
 				"100:\tfrom all lookup main\n" +
-				"32765:\tfrom all fwmark 0x7892 lookup 7890\n" +
+				"32765:\tfrom all fwmark 0x7892 lookup 7892\n" +
 				"32766:\tfrom all lookup main\n",
 			code: 0,
 		},
@@ -208,7 +208,7 @@ func TestCheckIPRule_DuplicateFwmarkFails(t *testing.T) {
 		"ip rule list": {
 			out: "0:\tfrom all lookup local\n" +
 				"100:\tfrom all fwmark 0x7892 lookup 99\n" +
-				"32765:\tfrom all fwmark 0x7892 lookup 7890\n",
+				"32765:\tfrom all fwmark 0x7892 lookup 7892\n",
 			code: 0,
 		},
 	})
@@ -224,7 +224,7 @@ func TestCheckIPRule_DuplicateFwmarkFails(t *testing.T) {
 
 func TestCheckIPRoute_Pass(t *testing.T) {
 	stubRunReadOnly(t, map[string]cmdResult{
-		"ip route show table 7890": {out: "default dev utun scope link\n", code: 0},
+		"ip route show table 7892": {out: "default dev utun scope link\n", code: 0},
 	})
 	r := config.DefaultRouting()
 	checks := checkIPRoute(r)
@@ -235,7 +235,7 @@ func TestCheckIPRoute_Pass(t *testing.T) {
 
 func TestCheckIPRoute_DefaultMissingFails(t *testing.T) {
 	stubRunReadOnly(t, map[string]cmdResult{
-		"ip route show table 7890": {out: "", code: 0},
+		"ip route show table 7892": {out: "", code: 0},
 	})
 	r := config.DefaultRouting()
 	checks := checkIPRoute(r)
@@ -246,7 +246,7 @@ func TestCheckIPRoute_DefaultMissingFails(t *testing.T) {
 
 func TestCheckIPRoute_ShadowRouteWarns(t *testing.T) {
 	stubRunReadOnly(t, map[string]cmdResult{
-		"ip route show table 7890": {out: "default dev utun\n1.1.1.1 via 192.168.1.1 dev eth0\n", code: 0},
+		"ip route show table 7892": {out: "default dev utun\n1.1.1.1 via 192.168.1.1 dev eth0\n", code: 0},
 	})
 	r := config.DefaultRouting()
 	checks := checkIPRoute(r)

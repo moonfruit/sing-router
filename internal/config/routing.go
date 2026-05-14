@@ -27,7 +27,7 @@ func DefaultRouting() Routing {
 		Tun:          "utun",
 		FakeIP:       "28.0.0.0/8",
 		LAN:          "192.168.50.0/24",
-		RouteTable:   7890,
+		RouteTable:   7892,
 		ProxyPorts:   "22,80,443,8080,8443",
 	}
 }

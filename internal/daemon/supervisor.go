@@ -28,7 +28,7 @@ type SupervisorConfig struct {
 	// ReapplyRoutesHook 仅装与 TUN 设备绑定的路由（default route + fwmark rule），
 	// 不动 iptables / ipset。bootStep 走 skipStartupIfInstalled 分支（Restart /
 	// RecoverFromFailedApply / Run 快速崩溃恢复）时，sing-box 杀掉重起会让
-	// 旧 utun fd 关闭→内核自动删除 `default dev utun table 7890`。startup.sh
+	// 旧 utun fd 关闭→内核自动删除 `default dev utun table 7892`。startup.sh
 	// 不重跑就没人再装这条路由，所以 supervisor 在这条分支上必须主动调它。
 	// 为 nil 时该分支退化为旧行为（路由会丢），调用方应在 wireup 时注入。
 	ReapplyRoutesHook func(context.Context) error
@@ -154,7 +154,7 @@ func (s *Supervisor) startSingBox(ctx context.Context) error {
 	// leader，sing-box 继承 daemon 的 pgid。当 shell 退出（或 sshd disconnect）
 	// 发 `kill -HUP -<pgid>` 时 sing-box 也会收到 SIGHUP，触发 sing-box 内部
 	// reload→TUN inbound 重建→旧 utun fd 关闭→内核自动删除 `default dev utun
-	// table 7890`，但 supervisor 完全不知情（sing-box pid 没变），路由不会重装。
+	// table 7892`，但 supervisor 完全不知情（sing-box pid 没变），路由不会重装。
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	pr, pw := io.Pipe()
@@ -363,7 +363,7 @@ func (s *Supervisor) Run(ctx context.Context) error {
 
 // WatchRoutes 周期性巡检 device-bound 路由，发现丢失就调 ReapplyRoutesHook 补回。
 // 这是对外部 `kill -HUP <sing-box-pid>` 的兜底：sing-box 收到 SIGHUP 会 reload→
-// TUN inbound 重建→旧 utun fd 关闭→内核自动删 `default dev utun table 7890`，但
+// TUN inbound 重建→旧 utun fd 关闭→内核自动删 `default dev utun table 7892`，但
 // sing-box pid 没变、子进程没退，supervisor 的状态机完全观察不到这次"换 utun"。
 // RouteHealthy 或 ReapplyRoutesHook 为 nil 时直接返回（watcher 禁用）。
 // 阻塞运行，ctx 取消即返回；只在 StateRunning 下巡检（其余状态由 bootStep 兜底）。
