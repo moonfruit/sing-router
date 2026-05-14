@@ -210,3 +210,107 @@ restore_to_running() {
     esac
     wait_state running 120 || note "restore_to_running: 120s 后仍非 running —— 需人工检查"
 }
+
+# ============================================================
+# 3. 故障注入与资源操作助手
+# ============================================================
+
+# crashloop_to_fatal <timeout_s> : 反复 kill -9 sing-box 子进程直到 StateFatal。rc 0 成功
+crashloop_to_fatal() {
+    local timeout="$1" start now pid
+    start="$(date +%s)"
+    while :; do
+        [ "$(daemon_state)" = fatal ] && return 0
+        now="$(date +%s)"; [ $((now - start)) -ge "$timeout" ] && return 1
+        pid="$(singbox_pid)"
+        [ -n "$pid" ] && rsh "kill -9 $pid 2>/dev/null || true"
+        sleep 3
+    done
+}
+
+# stage_modified_zoo : 备份 var/zoo.raw.json，追加一个无害的 direct outbound
+#   → 触发 applier 真正重启（合法、能过 check、易回滚）。rc 1 若 zoo.raw.json 不存在。
+#   jq 在开发机侧执行，路由器只需 cat。
+stage_modified_zoo() {
+    local raw="$RUNDIR/var/zoo.raw.json" nonce
+    rsh "test -f $raw" || return 1
+    rsh "cp $raw $raw.testbak"
+    nonce="$(date +%s)"
+    rsh "cat $raw.testbak" \
+        | jq ".outbounds += [{\"type\":\"direct\",\"tag\":\"_rdtest_${nonce}\"}]" \
+        | rsh "cat > $raw"
+}
+
+# stage_bad_check_zoo : 备份并写入一个 preprocess 能过、sing-box check 必失败的 zoo
+#   （selector 引用不存在的 outbound tag）。rc 1 若 zoo.raw.json 不存在。
+stage_bad_check_zoo() {
+    local raw="$RUNDIR/var/zoo.raw.json"
+    rsh "test -f $raw" || return 1
+    rsh "cp $raw $raw.testbak"
+    rsh "cat $raw.testbak" \
+        | jq '.outbounds += [{"type":"selector","tag":"_rdtest_bad","outbounds":["does-not-exist-tag"]}]' \
+        | rsh "cat > $raw"
+}
+
+# restore_zoo : 从 .testbak 还原 var/zoo.raw.json（trap EXIT 用）
+restore_zoo() {
+    rsh "test -f $RUNDIR/var/zoo.raw.json.testbak && mv -f $RUNDIR/var/zoo.raw.json.testbak $RUNDIR/var/zoo.raw.json || true"
+}
+
+# stage_checkok_runfail_box : 在 bin/sing-box.new 放一个假 sing-box
+#   —— `check`/`version` 退出 0，`run` 立即退出 1。用于 D6 的 restart 失败 → revert+recover。
+stage_checkok_runfail_box() {
+    local stg="$RUNDIR/bin/sing-box.new"
+    rsh "cat > $stg" <<'FAKE'
+#!/bin/sh
+# real-device test fake sing-box: check/version succeed, run fails immediately.
+case "$1" in
+    check|version) exit 0 ;;
+    run) echo "fake sing-box: simulated run failure" >&2; exit 1 ;;
+    *) exit 0 ;;
+esac
+FAKE
+    rsh "chmod +x $stg"
+}
+
+# restore_box : 清掉残留的 bin/sing-box.new（trap EXIT 用）
+restore_box() { rsh "rm -f $RUNDIR/bin/sing-box.new"; }
+
+# modify_cn_txt : 备份 var/cn.txt 并追加一条无害 TEST-NET CIDR。rc 1 若不存在。
+modify_cn_txt() {
+    local cn="$RUNDIR/var/cn.txt"
+    rsh "test -f $cn" || return 1
+    rsh "cp $cn $cn.testbak && echo '198.51.100.0/24' >> $cn"
+}
+
+# restore_cn_txt : 从 .testbak 还原 var/cn.txt（trap EXIT 用）
+restore_cn_txt() {
+    rsh "test -f $RUNDIR/var/cn.txt.testbak && mv -f $RUNDIR/var/cn.txt.testbak $RUNDIR/var/cn.txt || true"
+}
+
+# apply_via_api → 打印 POST /api/v1/apply 的 HTTP code（200/500/501...）
+apply_via_api() {
+    rsh "curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:9998/api/v1/apply"
+}
+
+# block_host <hostname> : 解析 host 的 IP 并在路由器 OUTPUT 链 REJECT（仅影响路由器自身出站）
+#   解析结果记到 /tmp/.rd_blocked_<host> 供 unblock 用。rc 1 若解析不到。
+block_host() {
+    local host="$1" ips ip
+    ips="$(rsh "nslookup $host 2>/dev/null | awk '/^Name:/{f=1;next} f&&/Address/{print \$NF}'")"
+    [ -n "$ips" ] || return 1
+    for ip in $ips; do
+        rsh "iptables -I OUTPUT -d $ip -j REJECT 2>/dev/null || true"
+    done
+    printf '%s\n' "$ips" | rsh "cat > /tmp/.rd_blocked_${host}"
+}
+
+# unblock_host <hostname> : 撤销 block_host 装的 REJECT 规则（trap EXIT 用）
+unblock_host() {
+    local host="$1" ips ip
+    ips="$(rsh "cat /tmp/.rd_blocked_${host} 2>/dev/null")"
+    for ip in $ips; do
+        rsh "iptables -D OUTPUT -d $ip -j REJECT 2>/dev/null || true"
+    done
+    rsh "rm -f /tmp/.rd_blocked_${host}"
+}
