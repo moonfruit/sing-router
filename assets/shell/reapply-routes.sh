@@ -6,8 +6,8 @@
 #   - `ip route default dev $TUN table $ROUTE_TABLE`（设备绑定，会被内核
 #     在 TUN fd 关闭时自动删除；sing-box 收到 SIGHUP reload 或 supervisor.
 #     Restart 杀子再起都会触发）
-#   - `ip rule fwmark $ROUTE_MARK lookup $ROUTE_TABLE`（与设备无关，幂等添加
-#     兜底防止意外丢失）
+#   - `ip rule fwmark $ROUTE_MARK lookup $ROUTE_TABLE`（与设备无关，先删干净
+#     再 add，幂等且自愈：清掉历次累积的重复条目）
 # 由 supervisor 在 sing-box 重启而 startup.sh 不重跑的场景下调用（即
 # bootStep(skipStartupIfInstalled=true) 分支），保住"快速重启路径"上的
 # 路由可用性。
@@ -31,6 +31,8 @@ while [ "$i" -lt 10 ]; do
 done
 
 ip route replace default dev "$TUN" table "$ROUTE_TABLE"
+# ip rule 没有 replace 动词：先把累积的重复全删掉再 add 一条，保证幂等 + 自愈。
+while ip rule del fwmark "$ROUTE_MARK" table "$ROUTE_TABLE" 2>/dev/null; do :; done
 ip rule add fwmark "$ROUTE_MARK" table "$ROUTE_TABLE" 2>/dev/null || true
 
 echo "sing-router reapply-routes: default route + fwmark rule restored"

@@ -1,13 +1,16 @@
 #!/usr/bin/env bash
-# S6 teardown 必须清净累积的 ip rule —— 调查 + 回归
+# S6 ip rule 幂等 + teardown 清净 —— 调查 + 回归
 #
-# 背景：ip rule add 不幂等。startup.sh / reapply-routes.sh 每次（冷启 / restart /
-# HUP / 崩溃恢复）都新增一条 `fwmark $ROUTE_MARK lookup $ROUTE_TABLE`，多次之后
-# 会累积多条重复。teardown.sh 若只 `ip rule del` 一条，就会留下 N-1 条残留 ——
-# stop / uninstall 之后策略路由里还挂着指向（已空）table 的规则。
+# 背景：ip rule 没有 replace 动词，原本 startup.sh / reapply-routes.sh 直接
+# `ip rule add`（不幂等），每次 boot / restart / HUP 都多堆一条
+# `fwmark $ROUTE_MARK lookup $ROUTE_TABLE`；teardown.sh 又只 del 一条 → 残留。
+# 修复后：startup.sh / reapply-routes.sh 改「先 while-del 再 add」（幂等 + 自愈），
+# teardown.sh 改「while-del 删到失败」（一次清净全部累积）。
 #
-# 本用例：先连做几次 restart 把 ip rule 堆起来（证明非幂等累积），再 stop 触发
-# teardown，断言指向 $ROUTE_TABLE 的 ip rule 被全部清掉（循环删除生效）。
+# 本用例验证两侧：
+#   part 1  连做 restart，ip rule 不再累积（脚本幂等）
+#   part 2  手工种入重复规则，模拟历史残留 / 外部污染
+#   part 3  stop → teardown 必须把全部（含手工种入的）清掉
 set -u
 export CASE_ID="S6"
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -18,25 +21,34 @@ require_running
 trap restore_to_running EXIT
 
 before="$(iprule_table_count)"
-note "起始：指向 table $ROUTE_TABLE 的 ip rule 条数 = $before"
+note "起始：指向 table $ROUTE_TABLE 的 ip rule = ${before}"
 
-note "连做 3 次 sing-router restart（每次 reapply-routes.sh 跑一次 ip rule add）"
+# ---- part 1: restart 不应累积（startup.sh / reapply-routes.sh 幂等）----
+note "连做 3 次 sing-router restart，验证 ip rule 不累积"
 for _ in 1 2 3; do
     rsh "$SINGROUTER restart" >/dev/null 2>&1 || true
     wait_state running 60 || note "  restart 后未及时回 running，继续"
 done
-mid="$(iprule_table_count)"
-note "3 次 restart 后：ip rule 条数 = $mid"
-[ "$mid" -gt "$before" ] \
-    || skip "ip rule 条数未增长（${before}→${mid}）—— 该平台 ip rule add 可能幂等，本用例不适用"
+after_restart="$(iprule_table_count)"
+note "3 次 restart 后：ip rule = ${after_restart}"
+[ "$after_restart" -le "$before" ] \
+    || fail "restart 累积了 ip rule（${before}→${after_restart}）—— ip rule add 未幂等"
 
-note "stop daemon → teardown 跑 ip rule 删除"
+# ---- part 2: 手工种入重复规则，模拟历史残留 / 外部污染 ----
+note "手工种入 3 条重复 fwmark ${ROUTE_MARK} 规则，模拟历史累积"
+rsh "for n in 1 2 3; do ip rule add fwmark $ROUTE_MARK table $ROUTE_TABLE; done"
+planted="$(iprule_table_count)"
+note "种入后：ip rule = ${planted}"
+[ "$planted" -gt "$after_restart" ] \
+    || fail "手工种入未生效（${after_restart}→${planted}）"
+
+# ---- part 3: stop → teardown 必须把全部（含手工种入的）清掉 ----
+note "stop daemon → teardown 循环删除"
 rsh "$SINGROUTER stop" >/dev/null 2>&1 || true
 wait_state offline 30 || note "daemon 未到 offline（可能已退出）；继续"
 sleep 2
-
-after="$(iprule_table_count)"
-note "teardown 后：ip rule 条数 = $after"
-[ "$after" -eq 0 ] \
-    || fail "teardown 后仍残留 $after 条指向 table $ROUTE_TABLE 的 ip rule —— 循环删除未生效"
-pass "ip rule 累积 ${before}→${mid}，teardown 循环删除清净至 0"
+final="$(iprule_table_count)"
+note "teardown 后：ip rule = ${final}"
+[ "$final" -eq 0 ] \
+    || fail "teardown 后仍残留 ${final} 条指向 table $ROUTE_TABLE 的 ip rule —— 循环删除未清净"
+pass "restart 不累积（${before}→${after_restart}）；手工种入至 ${planted}；teardown 全清至 0"

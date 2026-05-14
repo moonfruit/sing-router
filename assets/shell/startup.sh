@@ -34,6 +34,9 @@ fi
 
 # ===================== 1. 路由表 =====================
 ip route replace default dev "$TUN" table "$ROUTE_TABLE"
+# ip rule 没有 replace 动词：先把累积的重复全删掉再 add 一条，保证幂等。
+# （ip rule add 不幂等，否则每次 boot / restart / HUP 都会多堆一条重复规则。）
+while ip rule del fwmark "$ROUTE_MARK" table "$ROUTE_TABLE" 2>/dev/null; do :; done
 ip rule add fwmark "$ROUTE_MARK" table "$ROUTE_TABLE" 2>/dev/null || true
 
 # ===================== 2.1 TCP 透明代理 =====================
