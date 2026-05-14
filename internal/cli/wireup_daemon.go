@@ -259,10 +259,16 @@ func realRunDaemon(ctx context.Context, rundir string) error {
 			AutoApply:       cfg.Sync.SyncAutoApply(),
 		},
 		ReapplyRules: func(ctx context.Context) error {
+			em.Info("shell", "shell.reapply_rules.exec", "running reapply-rules (teardown + startup)", nil)
 			if err := runner.Run(ctx, string(teardown), nil); err != nil {
 				em.Warn("shell", "shell.teardown.failed", "teardown best-effort failed: {Err}", map[string]any{"Err": err.Error()})
 			}
-			return runner.Run(ctx, string(startup), nil)
+			if err := runner.Run(ctx, string(startup), nil); err != nil {
+				em.Error("shell", "shell.reapply_rules.failed", "reapply-rules failed: {Err}", map[string]any{"Err": err.Error()})
+				return err
+			}
+			em.Info("shell", "shell.reapply_rules.completed", "iptables reinstalled", nil)
+			return nil
 		},
 		ReopenLog:     writer.Reopen,
 		CheckConfig:   checkConfig,
