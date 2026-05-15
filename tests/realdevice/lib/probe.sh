@@ -17,7 +17,10 @@ DIRECT_URL="${PROBE_DIRECT_URL:-https://www.baidu.com}"
 PROXY_URL="${PROBE_PROXY_URL:-https://www.google.com}"
 
 _check() {  # <url> -> OK|FAIL（拿到任意 HTTP 响应即 OK，连接失败/超时即 FAIL）
-    if command -v curl >/dev/null 2>&1; then
+    # 用 `which` 而非 `command -v`：BusyBox ash 可能没编进 `command` builtin
+    # （路由器固件实测 1.24.1 即如此），`command -v` 会直接 "command: not found"，
+    # 把本可用 curl 的环境误判成走 wget 兜底（见 commit 43220d6）。
+    if which curl >/dev/null 2>&1; then
         if curl -4 -sS -m "$TIMEOUT" -o /dev/null "$1" 2>/dev/null; then echo OK; else echo FAIL; fi
     else
         # wget 兜底（需支持 https 与 -4；GNU wget / 较新 busybox 均可）
