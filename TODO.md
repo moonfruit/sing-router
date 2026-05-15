@@ -13,5 +13,6 @@
 
 ## bug fix
 
-- [*] sing-router daemon crash
-- [ ] ip rule del 有时没能成功
+- [x] sing-router daemon crash
+- [x] ip rule del 执行多次直到失败
+- [ ] No token docker test Phase E error
