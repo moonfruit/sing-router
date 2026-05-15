@@ -14,7 +14,10 @@ log() {
 }
 
 # Guard: if /opt isn't mounted yet (early boot before entware), no-op silently.
-if ! command -v sing-router >/dev/null 2>&1; then
+# 用 `which` 而非 `command -v`：路由器固件的 BusyBox（如 1.24.1）ash 可能没编进
+# `command` builtin，`command -v` 会直接报 "command: not found" 让 guard 误判、
+# 钩子永远跳过 —— WAN 重拨后 iptables 再也补不回来。
+if ! which sing-router >/dev/null 2>&1; then
     log "skipped (action=$ACTION): sing-router not on PATH (entware not mounted yet?)"
     exit 0
 fi

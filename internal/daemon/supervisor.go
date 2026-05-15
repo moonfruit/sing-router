@@ -55,6 +55,7 @@ type Supervisor struct {
 
 	mu                sync.Mutex
 	cmd               *exec.Cmd
+	procCtx           context.Context // sing-box 子进程生命周期绑定的 ctx；Boot 时捕获（daemon 级）
 	iptablesInstalled bool
 	nextBackoffIdx    int
 	restartCount      int
@@ -109,6 +110,10 @@ func (s *Supervisor) RestartCount() int {
 func (s *Supervisor) Boot(ctx context.Context) error {
 	s.mu.Lock()
 	s.bootAt = time.Now()
+	// 捕获 daemon 级 ctx 作为 sing-box 子进程的生命周期锚点。后续 Restart /
+	// RecoverFromFailedApply / Start 经 HTTP 触发时传的是请求级 r.Context()，
+	// 绝不能拿它去 exec.CommandContext —— 否则 HTTP 请求一结束子进程就被 SIGKILL。
+	s.procCtx = ctx
 	s.mu.Unlock()
 	return s.bootStep(ctx, false /*runHookEvenIfInstalled*/)
 }
@@ -147,7 +152,16 @@ func (s *Supervisor) bootStep(ctx context.Context, skipStartupIfInstalled bool) 
 }
 
 func (s *Supervisor) startSingBox(ctx context.Context) error {
-	cmd := exec.CommandContext(ctx, s.cfg.SingBoxBinary, s.cfg.SingBoxArgs...)
+	// 子进程生命周期绑 daemon 级 procCtx，不绑调用方（可能是 HTTP 请求级）ctx。
+	// procCtx 由 Boot 捕获；若 Boot 未跑过（测试可能直接构造后调 bootStep），
+	// 退化用调用方 ctx。
+	s.mu.Lock()
+	procCtx := s.procCtx
+	s.mu.Unlock()
+	if procCtx == nil {
+		procCtx = ctx
+	}
+	cmd := exec.CommandContext(procCtx, s.cfg.SingBoxBinary, s.cfg.SingBoxArgs...)
 	cmd.Dir = s.cfg.SingBoxDir
 	// 把 sing-box 隔离到独立进程组：daemon 作为它的"信号防火墙"。
 	// 否则 daemon 被 `sing-router daemon &` 启动后，daemon 是 shell job 进程组的
@@ -327,14 +341,46 @@ var ErrShutdownRequested = errors.New("shutdown requested")
 
 func (s *Supervisor) Run(ctx context.Context) error {
 	for {
+		// 快照「当前监控的子进程」+「它的退出 channel」。两者必须成对取，
+		// 这样下面才能判断醒来时子进程是否已被 Restart 换成了新的。
+		s.mu.Lock()
+		ch := s.childExited
+		watched := s.cmd
+		s.mu.Unlock()
+
 		// 等子进程退出
 		select {
 		case <-ctx.Done():
 			return ErrShutdownRequested
-		case <-s.childExitedCh():
+		case <-ch:
 		}
-		// running 状态下子进程退出 → 进 degraded
-		if s.sm.Current() != StateRunning {
+
+		// ch 关闭：watched 这个子进程退出了。需要区分「真崩溃」与
+		// 「Restart / RecoverFromFailedApply / Stop 故意杀的」—— 否则 Restart 一来
+		// （它先切 Reloading 再 killChild），Run 就会因 state != Running 而 return，
+		// 监控循环永久退出，新子进程从此裸奔。
+		s.mu.Lock()
+		replaced := s.cmd != watched
+		s.mu.Unlock()
+		if replaced {
+			// 子进程已被 Restart/Recover 换成新的 → 这次退出是旧的、预期的。
+			// 回到循环监控新子进程。
+			continue
+		}
+		switch s.sm.Current() {
+		case StateRunning:
+			// 真崩溃，且尚未被替换 → 进 degraded + 退避重启（下方原逻辑）。
+		case StateReloading:
+			// Restart/Recover 已 killChild、但还没装上新子进程。略等它装好
+			// （s.cmd 变化）再继续，避免对着已关闭的旧 channel 空转。
+			select {
+			case <-ctx.Done():
+				return ErrShutdownRequested
+			case <-time.After(20 * time.Millisecond):
+			}
+			continue
+		default:
+			// Stopping / Stopped / Fatal → 子进程退出是预期的，干净退出循环。
 			return nil
 		}
 		if err := s.sm.Transition(StateDegraded); err != nil {

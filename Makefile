@@ -50,3 +50,13 @@ update-rule-sets:
 
 update-all: update-cn update-rule-sets
 	@echo "all embedded assets up to date"
+
+.PHONY: realdevice-lint realdevice-test
+# 实机测试套件：lint 跑纯逻辑单测 + 用例语法检查（无需路由器）
+realdevice-lint:
+	bash tests/realdevice/lib/probe_test.sh
+	bash tests/realdevice/lib/harness_test.sh
+	bash tests/realdevice/run.sh --dry-run
+# 跑实机用例（需 tests/realdevice/config.sh + 可达路由器）；CASES 可选，如 `make realdevice-test CASES="S W"`
+realdevice-test:
+	bash tests/realdevice/run.sh $(CASES)

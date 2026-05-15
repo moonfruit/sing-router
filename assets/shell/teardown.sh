@@ -41,7 +41,11 @@ ip6tables -D INPUT -p tcp --dport 53 -j REJECT 2>/dev/null || true
 ip6tables -D INPUT -p udp --dport 53 -j REJECT 2>/dev/null || true
 
 # ---- 路由表 + rule ----
-ip rule del fwmark "$ROUTE_MARK" table "$ROUTE_TABLE" 2>/dev/null || true
+# ip rule add 不幂等：startup.sh / reapply-routes.sh 每次都新增一条
+# `fwmark $ROUTE_MARK lookup $ROUTE_TABLE`，多次 boot / restart / HUP 后会累积
+# 多条重复。单条 del 只删一条 → 残留留到下次。循环删到失败为止：一次成功
+# teardown 即清掉全部历史残留（ip rule del 无匹配时退出码非 0，循环干净终止）。
+while ip rule del fwmark "$ROUTE_MARK" table "$ROUTE_TABLE" 2>/dev/null; do :; done
 ip route flush table "$ROUTE_TABLE" 2>/dev/null || true
 
 # ---- ipset ----

@@ -10,3 +10,4 @@
 /coverage.out
 /coverage.html
 /testdata/fake-sing-box/fake-sing-box
+/tests/realdevice/config.sh
