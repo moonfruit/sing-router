@@ -40,7 +40,10 @@ var followBinarySeeds = map[string]string{
 }
 
 // SeedDefaults 把内嵌资源拷到 rundir：
-//   - config.d/*.json + daemon.toml 走 writeIfMissing（保护用户编辑）
+//   - config.d/*.json + daemon.toml 走 writeDefaultAndSeed：xxx 仅在不存在时落
+//     盘（保护用户编辑，同时首装让 daemon 能直接起）；只有当 xxx 已存在且与
+//     新内容不一致时才写 xxx.default 供用户 diff/合并，等价或缺失时不产生
+//     冗余 .default 文件
 //   - var/cn.txt + var/rules/*.srs（含 etag）走 writeIfNewer（跟随二进制 mtime；
 //     用户 sing-router update 后的下载内容不会被覆盖）
 func SeedDefaults(rundir string, vars TemplateVars) error {
@@ -56,7 +59,7 @@ func SeedDefaults(rundir string, vars TemplateVars) error {
 		"config.d.default/zoo.json":         "config.d/zoo.json",
 	}
 	for src, dst := range plainFiles {
-		if err := writeIfMissing(rundir, dst, func() ([]byte, error) {
+		if err := writeDefaultAndSeed(rundir, dst, func() ([]byte, error) {
 			return assets.ReadFile(src)
 		}); err != nil {
 			return err
@@ -72,24 +75,42 @@ func SeedDefaults(rundir string, vars TemplateVars) error {
 		}
 	}
 
-	return writeIfMissing(rundir, "daemon.toml", func() ([]byte, error) {
+	return writeDefaultAndSeed(rundir, "daemon.toml", func() ([]byte, error) {
 		return renderDaemonToml(vars)
 	})
 }
 
-// writeIfMissing 仅当目标不存在时写入；已存在保留不动（用户编辑保护）。
-func writeIfMissing(rundir, dst string, produce func() ([]byte, error)) error {
-	full := filepath.Join(rundir, dst)
-	if _, err := os.Stat(full); err == nil {
-		return nil
-	} else if !errors.Is(err, os.ErrNotExist) {
+// writeDefaultAndSeed 是 RUNDIR 配置文件的安装语义：
+//   - dst 不存在：写 dst（首装让 daemon 直接能起），不产生 .default
+//   - dst 已存在且内容与 produce() 一致：什么也不做（无需 diff 基准）
+//   - dst 已存在且内容不同：保留 dst（用户编辑），把新内容覆盖到 dst+".default"
+//     供用户 diff/合并
+//
+// 仅 produce 一次，避免对 embed 数据重复 ReadFile。
+func writeDefaultAndSeed(rundir, dst string, produce func() ([]byte, error)) error {
+	data, err := produce()
+	if err != nil {
 		return err
 	}
-	return doWrite(full, produce)
+	full := filepath.Join(rundir, dst)
+	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+		return err
+	}
+	existing, err := os.ReadFile(full)
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		return os.WriteFile(full, data, 0o644)
+	case err != nil:
+		return err
+	}
+	if bytes.Equal(existing, data) {
+		return nil
+	}
+	return os.WriteFile(full+".default", data, 0o644)
 }
 
-// writeIfNewer 与 writeIfMissing 类似，但若目标文件 mtime 早于 cmpMtime 也覆盖。
-// cmpMtime.IsZero() 时退化为 writeIfMissing 语义（无法比较即不动）。
+// writeIfNewer 若目标文件 mtime 早于 cmpMtime 才覆盖；不存在则照常写。
+// cmpMtime.IsZero() 时只在文件缺失时写入（无法比较即不动）。
 func writeIfNewer(rundir, dst string, cmpMtime time.Time, produce func() ([]byte, error)) error {
 	full := filepath.Join(rundir, dst)
 	info, err := os.Stat(full)
