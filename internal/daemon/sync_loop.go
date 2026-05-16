@@ -34,7 +34,7 @@ func StartSyncLoop(ctx context.Context, updater *syncpkg.Updater, cfg SyncLoopCo
 			if r := recover(); r != nil {
 				reportPanic("sync.loop", r)
 				em.Fatal("recover", "panic.recovered",
-					"panic in {Name}: see stderr.log for stack",
+					"panic in {Name}: see sing-router.err for stack",
 					map[string]any{"Name": "sync.loop"})
 			}
 		}()

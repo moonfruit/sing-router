@@ -51,7 +51,7 @@ the path (handle rotate / truncate / re-create).
 A FILE ending in .gz (e.g. a rotated log/sing-router.log.1.gz) is transparently
 decompressed; -f / -F are ignored for .gz files since archived logs don't grow.
 
-Lines that don't parse as CLEF JSON (e.g. Go runtime panic stacks in stderr.log)
+Lines that don't parse as CLEF JSON (e.g. Go runtime panic stacks in sing-router.err)
 pass through verbatim.`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -218,7 +218,7 @@ func (r *logRenderer) emit(line []byte) {
 		_, _ = r.out.Write(r.scratch)
 		return
 	}
-	// 非 JSON 行（如 stderr.log 的 panic 栈）原样输出，不应用过滤。
+	// 非 JSON 行（如 sing-router.err 的 panic 栈）原样输出，不应用过滤。
 	if len(line) == 0 || line[0] != '{' {
 		r.scratch = append(r.scratch[:0], line...)
 		r.scratch = append(r.scratch, '\n')

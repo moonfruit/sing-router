@@ -54,7 +54,7 @@ docs/superpowers/{specs,plans}/  # 设计稿与实施计划（按阶段 module-a
 /opt/etc/init.d/S99sing-router       (Entware init.d，由 install 写入)
   └─ sing-router daemon -D $RUNDIR    （默认 $RUNDIR = /opt/home/sing-router）
        ├─ writePID → run/sing-router.pid
-       ├─ redirectStderr → log/stderr.log  (linux-only：dup3 fd 2，接住 Go runtime panic/fatal)
+       ├─ redirectStderr → log/sing-router.err  (linux-only：dup3 fd 2，接住 Go runtime panic/fatal)
        ├─ EmitterStack: Bus + Emitter + Writer(log/sing-router.log, rotate+gzip)
        ├─ HTTP listener 127.0.0.1:9998  (/api/v1/{status,start,stop,restart,check,apply,
        │     reload-cn-ipset,reapply-rules,logs,script/,shutdown})
@@ -78,7 +78,7 @@ Ready check 只允许 dial **mixed-in** 端口（`readyCheckDialMixedPort = 7890
 sing-box 冷启要做 cache-file 加载 + rule-set 下载 + router 启动，整体可达 30s+。默认 `TotalTimeout=60s` 是经过验证的下限，缩短前考虑这一点。
 
 ### init.d 把 stdout/stderr 重定向到 /dev/null
-固件 init.d (`. /opt/etc/init.d/rc.func`) 的标准做法是 `$PROC $ARGS > /dev/null 2>&1 &`。Go runtime 自身的 `fatal error:` 走默认 fd 2 就被丢进黑洞——事故无痕。`internal/cli/stderr_redirect_linux.go` 用 `syscall.Dup3` 把 fd 2 重定向到 `log/stderr.log`，darwin 用 no-op stub（`stderr_redirect_other.go`）。**任何 goroutine 都必须自带 `defer recover()`+`reportPanic`**，否则一个未捕获 panic 会拆掉整个 daemon。
+固件 init.d (`. /opt/etc/init.d/rc.func`) 的标准做法是 `$PROC $ARGS > /dev/null 2>&1 &`。Go runtime 自身的 `fatal error:` 走默认 fd 2 就被丢进黑洞——事故无痕。`internal/cli/stderr_redirect_linux.go` 用 `syscall.Dup3` 把 fd 2 重定向到 `log/sing-router.err`，darwin 用 no-op stub（`stderr_redirect_other.go`）。**任何 goroutine 都必须自带 `defer recover()`+`reportPanic`**，否则一个未捕获 panic 会拆掉整个 daemon。
 
 ### Applier 的 sha256 真变化闸门
 gitee 上游会在内容不变时给新 etag → naive 实现会反复 restart。`internal/daemon/applier.go` 对每个资源（sing-box / zoo.json / rule-set.json / cn.txt）都以最终落盘内容的 sha256 与 `var/apply-state.json` 中上次成功 apply 的快照比对，**完全相同则 no-op**。sync_loop 与 CLI `update --apply` 都走这条路径。

@@ -78,7 +78,7 @@ func Run(ctx context.Context, opts Options) error {
 			if r := recover(); r != nil {
 				reportPanic("daemon.http", r)
 				opts.Emitter.Fatal("recover", "panic.recovered",
-					"panic in {Name}: see stderr.log for stack",
+					"panic in {Name}: see sing-router.err for stack",
 					map[string]any{"Name": "daemon.http"})
 				cancel() // 走主循环的 graceful Shutdown,确保 teardown.sh 跑
 				httpDone <- fmt.Errorf("panic: %v", r)
@@ -88,7 +88,7 @@ func Run(ctx context.Context, opts Options) error {
 	}()
 
 	// 信号: TERM/INT → cancel ctx, HUP → reopen 日志(不退出), PIPE → 忽略
-	// (fd 2 现在被 wireup 重定向到 stderr.log,EPIPE 不应该再撞到 Go 默认 sigpipe-on-fd-2)。
+	// (fd 2 现在被 wireup 重定向到 sing-router.err,EPIPE 不应该再撞到 Go 默认 sigpipe-on-fd-2)。
 	signal.Ignore(syscall.SIGPIPE)
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
@@ -128,7 +128,7 @@ func Run(ctx context.Context, opts Options) error {
 			if r := recover(); r != nil {
 				reportPanic("supervisor.WatchRoutes", r)
 				opts.Emitter.Fatal("recover", "panic.recovered",
-					"panic in {Name}: see stderr.log for stack",
+					"panic in {Name}: see sing-router.err for stack",
 					map[string]any{"Name": "supervisor.WatchRoutes"})
 			}
 		}()
@@ -142,7 +142,7 @@ func Run(ctx context.Context, opts Options) error {
 			if r := recover(); r != nil {
 				reportPanic("supervisor.Run", r)
 				opts.Emitter.Fatal("recover", "panic.recovered",
-					"panic in {Name}: see stderr.log for stack",
+					"panic in {Name}: see sing-router.err for stack",
 					map[string]any{"Name": "supervisor.Run"})
 				cancel()
 				runDone <- fmt.Errorf("panic: %v", r)

@@ -191,7 +191,7 @@ func (s *Supervisor) startSingBox(ctx context.Context) error {
 				reportPanic("supervisor.consumeStderr", r)
 				if s.cfg.Emitter != nil {
 					s.cfg.Emitter.Fatal("recover", "panic.recovered",
-						"panic in {Name}: see stderr.log for stack",
+						"panic in {Name}: see sing-router.err for stack",
 						map[string]any{"Name": "supervisor.consumeStderr"})
 				}
 			}
