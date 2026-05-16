@@ -54,7 +54,7 @@ func newTestEmitter(t *testing.T) *clef.Emitter {
 		MinLevel: log.LevelInfo,
 		Writer:   w,
 	})
-	t.Cleanup(func() { _ = stack.Close() })
+	t.Cleanup(func() { _ = stack.Close(context.Background()) })
 	return stack.Emitter
 }
 

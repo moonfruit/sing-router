@@ -33,6 +33,29 @@ func TestDefaultConfigsPresent(t *testing.T) {
 	}
 }
 
+// TestDaemonTomlTemplateHasSeqSection 守护：daemon.toml.tmpl 必须包含 [seq]
+// 段，默认 commented + 注明 enabled = false 默认值，避免首次安装意外发
+// 远程日志。
+func TestDaemonTomlTemplateHasSeqSection(t *testing.T) {
+	data, err := ReadFile("daemon.toml.tmpl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(data)
+	if !strings.Contains(s, "[seq]") {
+		t.Error("daemon.toml.tmpl missing [seq] section")
+	}
+	if !strings.Contains(s, "enabled  = false") && !strings.Contains(s, "enabled = false") {
+		t.Error("daemon.toml.tmpl [seq] must default enabled to false (commented or otherwise)")
+	}
+	// Source 命名约定写在注释里——dashboard 维护者会读这一段。
+	for _, src := range []string{"daemon", "sing-box", "sing2seq"} {
+		if !strings.Contains(s, src) {
+			t.Errorf("daemon.toml.tmpl [seq] should document Source value %q", src)
+		}
+	}
+}
+
 func TestDNSFakeIPRangeFixed(t *testing.T) {
 	data, err := ReadFile("config.d.default/dns.json")
 	if err != nil {

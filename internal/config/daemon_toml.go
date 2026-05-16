@@ -14,6 +14,12 @@ const DefaultCNListURL = "https://cdn.jsdelivr.net/gh/juewuy/ShellCrash@update/b
 // envGiteeToken 是允许覆盖 [gitee].token 的环境变量名。
 const envGiteeToken = "SING_ROUTER_GITEE_TOKEN"
 
+// envSeqURL / envSeqAPIKey 是允许覆盖 [seq] 节敏感字段的环境变量名。
+const (
+	envSeqURL    = "SING_ROUTER_SEQ_URL"
+	envSeqAPIKey = "SING_ROUTER_SEQ_API_KEY"
+)
+
 // DaemonConfig 反映 daemon.toml 的全部字段；未来 B/C/E/F 模块各自加自己的 section。
 type DaemonConfig struct {
 	Runtime    RuntimeConfig    `toml:"runtime"`
@@ -24,6 +30,7 @@ type DaemonConfig struct {
 	Download   DownloadConfig   `toml:"download"`
 	Gitee      GiteeConfig      `toml:"gitee"`
 	Sync       SyncConfig       `toml:"sync"`
+	Seq        SeqConfig        `toml:"seq"`
 	Router     RouterConfig     `toml:"router"`
 	Install    InstallConfig    `toml:"install"`
 }
@@ -110,6 +117,36 @@ type SyncConfig struct {
 	AutoApply       *bool `toml:"auto_apply"`         // 默认 true：拉到新资源后自动 apply（zoo/sing-box → restart；cn.txt → ipset reload）。false 则仅 log。
 }
 
+// SeqConfig 控制把 CLEF 事件推送到远程 Seq 服务的 sink。默认完全关闭——
+// Enabled=false 或 URL="" 时 daemon 不构造 sink、不订阅 bus，与从前行为一致。
+//
+// 启用 = Enabled=true && URL!=""；不满足时 daemon 启动会发一条 seq.disabled
+// 事件后继续运行（不退出）。Source 字段：sink 自身诊断（buffer_overflow /
+// post_failed / shutdown_post_failed）走独立 emitter 的 Source="sing2seq"，
+// 与上游 sing2seq CLI 一致；daemon 业务事件 Source="daemon"，sing-box stderr
+// 解析事件 Source="sing-box"。Seq 端按 Source 切视图。
+type SeqConfig struct {
+	Enabled  bool   `toml:"enabled"`
+	URL      string `toml:"url"`
+	APIKey   string `toml:"api_key"`
+	Insecure bool   `toml:"insecure"`
+	// Level 按事件 @l 字段过滤；trace/debug/info/warn/error/fatal；
+	// 空字符串走默认 info。非法值在 wireup 阶段 fallback 到 info 并告警。
+	// 与 [log].level 各自独立——支持"本地详细 / 远程精简"或反过来。
+	Level string `toml:"level"`
+	// 高级调优；nil/0 走 seq.NewSink 内部默认（与 sing2seq CLI 一致）。
+	BatchSize      *int `toml:"batch_size"`
+	ChannelBuffer  *int `toml:"channel_buffer"`
+	MaxPending     *int `toml:"max_pending"`
+	DropTarget     *int `toml:"drop_target"`
+	InitialBackoff *int `toml:"initial_backoff_ms"`
+	MaxBackoff     *int `toml:"max_backoff_ms"`
+	// CloseDrainTimeoutSec 是 daemon shutdown 时给 sink.Close 同步 drain 的总
+	// 超时秒数；超时后放弃 pending（sink 内部 shutdown_post_failed 已处理），
+	// 让 daemon 退出不被卡死。nil/0 走默认 10s。
+	CloseDrainTimeoutSec *int `toml:"close_drain_timeout_seconds"`
+}
+
 type RouterConfig struct {
 	DnsPort      *int    `toml:"dns_port"`
 	RedirectPort *int    `toml:"redirect_port"`
@@ -153,10 +190,18 @@ func LoadDaemonConfig(path string) (*DaemonConfig, error) {
 }
 
 // applyEnvOverrides 让运维场景 / CI 在不写 daemon.toml 的情况下注入敏感字段。
-// 当前仅 SING_ROUTER_GITEE_TOKEN：非空时覆盖 [gitee].token。
+// SING_ROUTER_GITEE_TOKEN 覆盖 [gitee].token；SING_ROUTER_SEQ_URL /
+// SING_ROUTER_SEQ_API_KEY 覆盖 [seq] 的相应字段（仅覆盖值，Enabled 仍由
+// toml 决定，避免 env 误启用 sink）。
 func applyEnvOverrides(cfg *DaemonConfig) {
 	if v := os.Getenv(envGiteeToken); v != "" {
 		cfg.Gitee.Token = v
+	}
+	if v := os.Getenv(envSeqURL); v != "" {
+		cfg.Seq.URL = v
+	}
+	if v := os.Getenv(envSeqAPIKey); v != "" {
+		cfg.Seq.APIKey = v
 	}
 }
 
@@ -292,6 +337,21 @@ func applyDefaults(cfg *DaemonConfig) {
 		v := true
 		cfg.Sync.AutoApply = &v
 	}
+	if cfg.Seq.Level == "" {
+		cfg.Seq.Level = "info"
+	}
+	if cfg.Seq.CloseDrainTimeoutSec == nil {
+		v := 10
+		cfg.Seq.CloseDrainTimeoutSec = &v
+	}
+}
+
+// SeqCloseDrainTimeoutSeconds 是 CloseDrainTimeoutSec 的安全访问器。未设置回退 10s。
+func (c SeqConfig) SeqCloseDrainTimeoutSeconds() int {
+	if c.CloseDrainTimeoutSec == nil || *c.CloseDrainTimeoutSec <= 0 {
+		return 10
+	}
+	return *c.CloseDrainTimeoutSec
 }
 
 // SyncIntervalSeconds 是 SyncConfig.IntervalSeconds 的安全访问器。未设置时回退默认值。

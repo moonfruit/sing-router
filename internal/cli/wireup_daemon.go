@@ -38,7 +38,14 @@ func realRunDaemon(ctx context.Context, rundir string) error {
 		return err
 	}
 
-	level, _ := log.ParseLevel(cfg.Log.Level)
+	writerLevel, _ := log.ParseLevel(cfg.Log.Level)
+	// emitter floor 取所有出口的最小值：低于它的事件谁都不要，免去入口构造。
+	emitterFloor := writerLevel
+	seqLevel, seqLevelWarn := resolveSeqLevel(cfg.Seq.Level)
+	seqAttaching := seqWillAttach(cfg.Seq)
+	if seqAttaching && seqLevel < emitterFloor {
+		emitterFloor = seqLevel
+	}
 	logPath := filepath.Join(rundir, cfg.Log.File)
 	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
 		return fmt.Errorf("mkdir log dir: %w", err)
@@ -61,13 +68,43 @@ func realRunDaemon(ctx context.Context, rundir string) error {
 		return err
 	}
 	stack := log.NewEmitterStack(log.StackConfig{
-		Source:   "daemon",
-		MinLevel: level,
-		Writer:   writer,
+		Source:         "daemon",
+		MinLevel:       emitterFloor,
+		WriterMinLevel: writerLevel,
+		Writer:         writer,
 	})
-	defer func() { _ = stack.Close() }()
+	defer func() {
+		// shutdown 总预算 = [seq].close_drain_timeout_seconds + 一点点空隙
+		// 留给 Bus drain 与 Writer flush。其它 extras 不存在时这个 ctx
+		// 也不会拖延 Close。
+		drainBudget := time.Duration(cfg.Seq.SeqCloseDrainTimeoutSeconds())*time.Second + 2*time.Second
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), drainBudget)
+		defer cancel()
+		_ = stack.Close(shutdownCtx)
+	}()
 	em := stack.Emitter
 	em.Info("supervisor", "supervisor.boot.started", "starting daemon at {Rundir}", map[string]any{"Rundir": rundir})
+
+	// 远程 Seq sink 接入。Enabled=false 或 URL=="" 时跳过；启用但配置不合法
+	// 时（如 [seq].level 非法）seqLevelWarn 非空，记一条 warn 事件后用 info
+	// 兜底。emitter floor 已在上面把 seq level 算进去；这里仅装订阅。
+	switch {
+	case seqAttaching:
+		if seqLevelWarn != "" {
+			em.Warn("seq", "seq.config.warning", "{Warn}", map[string]any{"Warn": seqLevelWarn})
+		}
+		attachSeqSink(stack, cfg.Seq, seqLevel)
+		em.Info("seq", "seq.enabled",
+			"seq sink attached: url={URL} log_level={LogLevel} seq_level={SeqLevel}",
+			map[string]any{
+				"URL":      cfg.Seq.URL,
+				"LogLevel": writerLevel.String(),
+				"SeqLevel": seqLevel.String(),
+			})
+	case cfg.Seq.Enabled && cfg.Seq.URL == "":
+		em.Warn("seq", "seq.disabled",
+			"[seq].enabled=true but url is empty; sink not attached", nil)
+	}
 
 	// 把 var/zoo.raw.json（由 sync.Updater 拉取）预处理写入 config.d/zoo.json。
 	// 缺失即跳过，保留种子默认；预处理失败仅警告，daemon 继续用上次成功的 zoo.json。

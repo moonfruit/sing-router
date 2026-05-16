@@ -234,6 +234,103 @@ func TestEnvOverrideAppliesEvenWhenFileMissing(t *testing.T) {
 	}
 }
 
+func TestLoadDaemonConfigSeqDefaults(t *testing.T) {
+	cfg, err := LoadDaemonConfig("/nonexistent/daemon.toml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Seq.Enabled {
+		t.Fatalf("default Seq.Enabled should be false")
+	}
+	if cfg.Seq.URL != "" {
+		t.Fatalf("default Seq.URL should be empty, got %q", cfg.Seq.URL)
+	}
+	if cfg.Seq.Level != "info" {
+		t.Fatalf("default Seq.Level = %q, want info", cfg.Seq.Level)
+	}
+	if cfg.Seq.SeqCloseDrainTimeoutSeconds() != 10 {
+		t.Fatalf("default close drain timeout = %d, want 10", cfg.Seq.SeqCloseDrainTimeoutSeconds())
+	}
+}
+
+func TestLoadDaemonConfigSeqFromTOML(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "daemon.toml")
+	body := `
+[seq]
+enabled                     = true
+url                         = "http://seq.lan:5341"
+api_key                     = "k-from-toml"
+insecure                    = true
+level                       = "warn"
+batch_size                  = 50
+channel_buffer              = 200
+max_pending                 = 1000
+drop_target                 = 500
+initial_backoff_ms          = 500
+max_backoff_ms              = 30000
+close_drain_timeout_seconds = 20
+`
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadDaemonConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Seq.Enabled {
+		t.Fatalf("Seq.Enabled should be true")
+	}
+	if cfg.Seq.URL != "http://seq.lan:5341" {
+		t.Fatalf("Seq.URL = %q", cfg.Seq.URL)
+	}
+	if cfg.Seq.APIKey != "k-from-toml" {
+		t.Fatalf("Seq.APIKey = %q", cfg.Seq.APIKey)
+	}
+	if !cfg.Seq.Insecure {
+		t.Fatalf("Seq.Insecure should be true")
+	}
+	if cfg.Seq.Level != "warn" {
+		t.Fatalf("Seq.Level = %q", cfg.Seq.Level)
+	}
+	if cfg.Seq.BatchSize == nil || *cfg.Seq.BatchSize != 50 {
+		t.Fatalf("Seq.BatchSize = %v", cfg.Seq.BatchSize)
+	}
+	if cfg.Seq.SeqCloseDrainTimeoutSeconds() != 20 {
+		t.Fatalf("close drain timeout = %d", cfg.Seq.SeqCloseDrainTimeoutSeconds())
+	}
+}
+
+func TestEnvOverridesSeqURLAndAPIKey(t *testing.T) {
+	t.Setenv(envSeqURL, "http://seq-from-env:5341")
+	t.Setenv(envSeqAPIKey, "k-from-env")
+	dir := t.TempDir()
+	path := filepath.Join(dir, "daemon.toml")
+	body := `
+[seq]
+enabled = true
+url     = "http://seq.lan:5341"
+api_key = "k-from-toml"
+`
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadDaemonConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Seq.URL != "http://seq-from-env:5341" {
+		t.Fatalf("Seq.URL env override missed: %q", cfg.Seq.URL)
+	}
+	if cfg.Seq.APIKey != "k-from-env" {
+		t.Fatalf("Seq.APIKey env override missed: %q", cfg.Seq.APIKey)
+	}
+	// Enabled 不能被 env 改动
+	if !cfg.Seq.Enabled {
+		t.Fatalf("Seq.Enabled should reflect toml, not be lost")
+	}
+}
+
 func TestInstallFirmwareDecode(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "daemon.toml")

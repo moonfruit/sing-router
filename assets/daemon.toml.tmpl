@@ -13,6 +13,10 @@ listen          = "127.0.0.1:9998"
 # token         = ""                 # A 阶段不启用，D 阶段加
 
 [log]
+# level 控本地 log 文件（log/sing-router.log）的级别下限；与 [seq].level
+# 各自独立——本地详细 / 远程精简 这种组合是支持的（典型：[log].level="info"
+# + [seq].level="warn"）。emitter 入口 floor 自动取两者更低值，低于 floor
+# 的事件根本不会进 bus。
 level           = "info"
 file            = "log/sing-router.log"
 rotate          = "internal"
@@ -77,6 +81,37 @@ path = "config.json"
 # 后台周期同步：interval_seconds = 0 即禁用（仅留 sing-router update CLI）。
 interval_seconds   = 21600
 on_start_delay_sec = 300
+
+[seq]
+# 远程 Seq 日志汇聚（sing2seq v1.3.0+ 的 seq.Sink）；默认关闭。
+# 启用条件 = enabled = true 且 url 非空。任一不满足 daemon 启动会发一条
+# seq.disabled 事件后继续运行（不退出）。
+#
+# Source 字段约定（Seq UI 用它切视图）：
+#   - daemon    — sing-router daemon 自身事件
+#   - sing-box  — 来自 sing-box stderr 的解析事件
+#   - sing2seq  — seq.Sink 自身诊断（buffer_overflow / post_failed / shutdown_post_failed）
+#
+# 关闭顺序：daemon shutdown 时按 close_drain_timeout_seconds 同步 drain
+# sink pending 队列；超时后放弃 pending、daemon 仍能退出。跨公网 Seq
+# 应适当调大 close_drain_timeout_seconds。
+#
+# enabled  = false
+# url      = "http://seq.lan:5341"    # 不要加 /ingest/clef 后缀
+# api_key  = ""                       # 非空时发 X-Seq-ApiKey header
+# insecure = false                    # true 时 TLS 跳过证书验证
+# level    = "info"                   # trace/debug/info/warn/error/fatal；与 [log].level 各自独立
+# 以下高级调优字段留空走 seq.Sink 默认（与上游 sing2seq CLI 一致）：
+# batch_size                  = 200
+# channel_buffer              = 1024
+# max_pending                 = 50000
+# drop_target                 = 25000
+# initial_backoff_ms          = 1000
+# max_backoff_ms              = 60000
+# close_drain_timeout_seconds = 10
+#
+# 也可由环境变量 SING_ROUTER_SEQ_URL / SING_ROUTER_SEQ_API_KEY 覆盖
+# 对应字段（仅覆盖值，enabled 仍由本节决定，避免误启用）。
 
 [router]
 # dns_port      = 1053
