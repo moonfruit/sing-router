@@ -1,14 +1,17 @@
 package firmware
 
 import (
+	"bytes"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"text/template"
 )
 
 const koolshareHookRel = "koolshare/init.d/N99sing-router.sh"
-const koolshareAssetPath = "firmware/koolshare/N99sing-router.sh"
+const koolshareAssetPath = "firmware/koolshare/N99sing-router.sh.tmpl"
 
 type koolshare struct {
 	base   string // 默认 "/"
@@ -17,10 +20,14 @@ type koolshare struct {
 
 func (k *koolshare) Kind() Kind { return KindKoolshare }
 
-// rundir is unused: the koolshare hook is self-contained and resolves
-// `sing-router` via $PATH at trigger time, not via a baked-in path.
-func (k *koolshare) InstallHooks(_ string) error {
-	script, err := fs.ReadFile(k.assets, koolshareAssetPath)
+// rundir is unused: the koolshare hook只依赖渲染进来的 binary 绝对路径，
+// 不需要知道 rundir。binary 必须是绝对路径（默认 /opt/sbin/sing-router）。
+func (k *koolshare) InstallHooks(_, binary string) error {
+	raw, err := fs.ReadFile(k.assets, koolshareAssetPath)
+	if err != nil {
+		return err
+	}
+	rendered, err := RenderHookTemplate(koolshareAssetPath, raw, binary)
 	if err != nil {
 		return err
 	}
@@ -28,7 +35,7 @@ func (k *koolshare) InstallHooks(_ string) error {
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 		return err
 	}
-	return atomicWriteExec(target, script, 0o755)
+	return atomicWriteExec(target, rendered, 0o755)
 }
 
 func (k *koolshare) RemoveHooks() error {
@@ -67,4 +74,21 @@ func atomicWriteExec(path string, data []byte, mode os.FileMode) error {
 		return err
 	}
 	return os.Rename(tmp, path)
+}
+
+// RenderHookTemplate executes a text/template against payload, binding
+// {{.Binary}} to binary. Exported so `sing-router script` / `/api/v1/script/`
+// can render embedded .tmpl hook payloads before printing them (otherwise
+// pipelines like `sing-router script koolshare/N99 | sh -s start_nat` get
+// an unrendered template and the BINARY guard fails).
+func RenderHookTemplate(name string, payload []byte, binary string) ([]byte, error) {
+	tmpl, err := template.New(name).Option("missingkey=error").Parse(string(payload))
+	if err != nil {
+		return nil, fmt.Errorf("parse %s template: %w", name, err)
+	}
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, map[string]string{"Binary": binary}); err != nil {
+		return nil, fmt.Errorf("render %s template: %w", name, err)
+	}
+	return buf.Bytes(), nil
 }

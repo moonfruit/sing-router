@@ -34,6 +34,7 @@ func newInstallCmd() *cobra.Command {
 		dryRun            bool
 		debugOnly         bool
 		giteeToken        string
+		binaryPath        string
 	)
 	cmd := &cobra.Command{
 		Use:   "install",
@@ -124,8 +125,12 @@ func newInstallCmd() *cobra.Command {
 				if err != nil {
 					return err
 				}
-				if err := run("install firmware hooks ("+string(kind)+")", func() error {
-					return target.InstallHooks(rundir)
+				binary, err := resolveInstallBinary(binaryPath)
+				if err != nil {
+					return err
+				}
+				if err := run("install firmware hooks ("+string(kind)+") binary="+binary, func() error {
+					return target.InstallHooks(rundir, binary)
 				}); err != nil {
 					return err
 				}
@@ -208,11 +213,30 @@ func newInstallCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&debugOnly, "debug-only", false,
 		"Seed rundir without writing /opt/etc/init.d or firmware hooks "+
 			"(for manual 'sing-router daemon -D' runs; implies --start=false)")
+	cmd.Flags().StringVar(&binaryPath, "binary", "",
+		"Absolute path of the installed sing-router binary; baked into nat-start hooks via {{.Binary}}. "+
+			"Default: resolved from os.Executable() (the path this install command was invoked as). "+
+			"Asus/Merlin firmware invoke nat-start with PATH=/sbin:/usr/sbin:/bin:/usr/bin (no /opt/sbin), "+
+			"so hooks must use an absolute path; relative --binary values are rejected.")
 	cmd.Flags().StringVar(&giteeToken, "gitee-token", "",
 		"Gitee private repo access token. On first install, written into [gitee].token of daemon.toml. "+
 			"On re-install, used as a runtime override for downloads in this command (daemon.toml is left untouched; "+
 			"edit it directly or set SING_ROUTER_GITEE_TOKEN to persist).")
 	return cmd
+}
+
+// resolveInstallBinary picks the absolute path to bake into the nat-start
+// hook's {{.Binary}}. When --binary is unset, use os.Executable() so the
+// install "just works" without flags. When --binary is set, require absolute
+// (relative paths silently break the hook in the nat-start context).
+func resolveInstallBinary(flag string) (string, error) {
+	if flag != "" {
+		if err := install.ValidateBinaryPath(flag); err != nil {
+			return "", err
+		}
+		return flag, nil
+	}
+	return install.ResolveSelfBinary()
 }
 
 // validateGiteeToken rejects tokens that would break the TOML render.

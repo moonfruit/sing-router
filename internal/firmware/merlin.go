@@ -17,15 +17,16 @@ type merlin struct {
 
 func (m *merlin) Kind() Kind { return KindMerlin }
 
-// rundir is unused: the merlin BEGIN/END block resolves
-// `sing-router` and the init.d script via $PATH at trigger time.
-func (m *merlin) InstallHooks(_ string) error {
+// rundir is unused: the merlin BEGIN/END block bakes the binary absolute path
+// via {{.Binary}} render. binary 必须是 sing-router 在路由器上的绝对路径
+// （默认 /opt/sbin/sing-router）—— Merlin 触发 nat-start 时 PATH 不含 /opt/sbin。
+func (m *merlin) InstallHooks(_, binary string) error {
 	// Read both snippet payloads first so a missing asset never leaves the system half-installed.
-	natPayload, err := readSnippetPayload(m.assets, "firmware/merlin/nat-start.snippet")
+	natPayload, err := readSnippetPayload(m.assets, "firmware/merlin/nat-start.snippet", binary)
 	if err != nil {
 		return err
 	}
-	svcPayload, err := readSnippetPayload(m.assets, "firmware/merlin/services-start.snippet")
+	svcPayload, err := readSnippetPayload(m.assets, "firmware/merlin/services-start.snippet", binary)
 	if err != nil {
 		return err
 	}
@@ -76,8 +77,9 @@ func (m *merlin) VerifyHooks() []HookCheck {
 	return checks
 }
 
-// readSnippetPayload extracts the lines between # BEGIN/# END markers in an embedded snippet.
-func readSnippetPayload(a fs.FS, name string) (string, error) {
+// readSnippetPayload extracts the lines between # BEGIN/# END markers in an
+// embedded snippet, then renders any {{.Binary}} placeholders.
+func readSnippetPayload(a fs.FS, name, binary string) (string, error) {
 	raw, err := fs.ReadFile(a, name)
 	if err != nil {
 		return "", err
@@ -97,7 +99,11 @@ func readSnippetPayload(a fs.FS, name string) (string, error) {
 			out = append(out, l)
 		}
 	}
-	return strings.Join(out, "\n"), nil
+	rendered, err := RenderHookTemplate(name, []byte(strings.Join(out, "\n")), binary)
+	if err != nil {
+		return "", err
+	}
+	return string(rendered), nil
 }
 
 // readFile is the os.ReadFile seam used by VerifyHooks; replaceable in tests to inject read failures.

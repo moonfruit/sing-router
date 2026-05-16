@@ -35,9 +35,13 @@ type HookCheck struct {
 
 // Target 封装一个固件目标的全部"安装侧"能力。
 // 不涉及 daemon/supervisor 的运行时行为——那部分对所有目标统一。
+//
+// binary 是 sing-router 二进制在路由器上的绝对路径，渲染进 nat-start hook
+// 模板的 {{.Binary}}。固件触发 nat-start 时 PATH 不含 /opt/sbin，hook 不能
+// 依赖 $PATH 查找 sing-router；调用方必须传绝对路径，默认 /opt/sbin/sing-router。
 type Target interface {
 	Kind() Kind
-	InstallHooks(rundir string) error
+	InstallHooks(rundir, binary string) error
 	RemoveHooks() error
 	VerifyHooks() []HookCheck
 }

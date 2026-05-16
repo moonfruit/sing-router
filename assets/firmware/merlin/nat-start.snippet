@@ -1,3 +1,5 @@
 # BEGIN sing-router (managed by `sing-router install`; do not edit)
-which sing-router >/dev/null 2>&1 && sing-router reapply-rules >/dev/null 2>&1 &
+# 绝对路径在 install 时渲染。Merlin/Asus 触发 nat-start 时 PATH 不含 /opt/sbin，
+# 不能依赖 $PATH 查找 sing-router。
+[ -x "{{.Binary}}" ] && "{{.Binary}}" reapply-rules >/dev/null 2>&1 &
 # END sing-router

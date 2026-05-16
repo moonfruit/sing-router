@@ -274,13 +274,7 @@ func realRunDaemon(ctx context.Context, rundir string) error {
 		CheckConfig:   checkConfig,
 		ReloadCNIpset: reloadCNIpset,
 		StatusExtra:   buildStatusExtra(rundir, cfg.Runtime.ConfigDir, cfg.Install.Firmware),
-		ScriptByName: func(name string) ([]byte, error) {
-			path, ok := scriptMap[name]
-			if !ok {
-				return nil, fmt.Errorf("unknown script %q", name)
-			}
-			return assets.ReadFile(path)
-		},
+		ScriptByName: loadScript,
 	})
 }
 

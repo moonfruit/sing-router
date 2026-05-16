@@ -19,7 +19,7 @@ func TestDefaultConfigsPresent(t *testing.T) {
 		"config.d.default/zoo.json",
 		"daemon.toml.tmpl",
 		"initd/S99sing-router",
-		"firmware/koolshare/N99sing-router.sh",
+		"firmware/koolshare/N99sing-router.sh.tmpl",
 		"firmware/merlin/nat-start.snippet",
 		"firmware/merlin/services-start.snippet",
 		"shell/startup.sh",
@@ -48,19 +48,28 @@ func TestDNSFakeIPRangeFixed(t *testing.T) {
 
 func TestNatStartSnippetMarkers(t *testing.T) {
 	data, _ := ReadFile("firmware/merlin/nat-start.snippet")
-	if !strings.Contains(string(data), "# BEGIN sing-router") {
+	s := string(data)
+	if !strings.Contains(s, "# BEGIN sing-router") {
 		t.Fatal("BEGIN marker missing")
 	}
-	if !strings.Contains(string(data), "# END sing-router") {
+	if !strings.Contains(s, "# END sing-router") {
 		t.Fatal("END marker missing")
 	}
-	if !strings.Contains(string(data), "sing-router reapply-rules") {
+	if !strings.Contains(s, "{{.Binary}}") {
+		t.Fatal("snippet should reference {{.Binary}} so install can bake the absolute path")
+	}
+	if !strings.Contains(s, "reapply-rules") {
 		t.Fatal("snippet should call reapply-rules")
+	}
+	// nat-start 触发时 PATH 不含 /opt/sbin —— 不许出现 `which sing-router` 这类裸名 lookup。
+	// 注释里提历史背景不算违规，与 TestEmbeddedShellScriptsNoCommandBuiltin 同套路。
+	if hasNonCommentSubstring(s, "which sing-router") {
+		t.Error("snippet must not rely on `which sing-router` PATH lookup; use {{.Binary}} absolute path")
 	}
 }
 
 func TestKoolshareScriptShape(t *testing.T) {
-	data, err := ReadFile("firmware/koolshare/N99sing-router.sh")
+	data, err := ReadFile("firmware/koolshare/N99sing-router.sh.tmpl")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,15 +77,36 @@ func TestKoolshareScriptShape(t *testing.T) {
 	if !strings.HasPrefix(s, "#!/bin/sh") {
 		t.Error("missing shebang")
 	}
-	if !strings.Contains(s, "which sing-router") {
-		t.Error("missing entware-mount guard (must use `which`, not `command -v` — 见 TestEmbeddedShellScriptsNoCommandBuiltin)")
+	if !strings.Contains(s, "{{.Binary}}") {
+		t.Error("script must reference {{.Binary}} so install can bake the absolute path")
 	}
-	if !strings.Contains(s, "sing-router reapply-rules") {
+	if !strings.Contains(s, "reapply-rules") {
 		t.Error("must call reapply-rules")
 	}
 	if !strings.Contains(s, "start_nat") {
 		t.Error("must handle start_nat action")
 	}
+	// Asus 触发 nat-start 时 PATH=/sbin:/usr/sbin:/bin:/usr/bin（不含 /opt/sbin），
+	// 任何 `which sing-router` / 裸名调用都会跳过 hook —— 这是历史上 WAN 重拨后
+	// iptables 补不回来的根因。Guard 改用 `[ -x "$BINARY" ]`。注释里出现历史描述不算违规。
+	if hasNonCommentSubstring(s, "which sing-router") {
+		t.Error("script must not rely on `which sing-router` PATH lookup; use $BINARY/{{.Binary}} absolute path")
+	}
+}
+
+// hasNonCommentSubstring returns true if needle appears in any line of s
+// that is not a shell comment (`#` 开头，允许前导空白）。与 TestEmbeddedShellScriptsNoCommandBuiltin
+// 的注释豁免同套路。
+func hasNonCommentSubstring(s, needle string) bool {
+	for _, line := range strings.Split(s, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "#") {
+			continue
+		}
+		if strings.Contains(line, needle) {
+			return true
+		}
+	}
+	return false
 }
 
 func TestStartupShellRequiresEnvVars(t *testing.T) {
@@ -137,7 +167,7 @@ func TestEmbeddedShellScriptsBusyboxSleep(t *testing.T) {
 		"shell/reapply-routes.sh",
 		"shell/reload-cn-ipset.sh",
 		"initd/S99sing-router",
-		"firmware/koolshare/N99sing-router.sh",
+		"firmware/koolshare/N99sing-router.sh.tmpl",
 	} {
 		data, err := ReadFile(p)
 		if err != nil {
@@ -169,7 +199,7 @@ func TestEmbeddedShellScriptsNoCommandBuiltin(t *testing.T) {
 		"shell/reapply-routes.sh",
 		"shell/reload-cn-ipset.sh",
 		"initd/S99sing-router",
-		"firmware/koolshare/N99sing-router.sh",
+		"firmware/koolshare/N99sing-router.sh.tmpl",
 		"firmware/merlin/nat-start.snippet",
 		"firmware/merlin/services-start.snippet",
 	} {

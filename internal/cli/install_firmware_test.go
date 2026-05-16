@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -68,5 +69,36 @@ func TestValidateGiteeToken_RejectsUnsafeChars(t *testing.T) {
 		if err := validateGiteeToken(tok); err == nil {
 			t.Errorf("token %q should be rejected", tok)
 		}
+	}
+}
+
+// 显式 --binary 必须是绝对路径——否则会装一个 nat-start 找不到 sing-router
+// 的失效 hook。Codex P3 (2026-05-17 review) 守护。
+func TestResolveInstallBinary_RejectsRelativeFlag(t *testing.T) {
+	for _, p := range []string{"sing-router", "./sing-router", "bin/sing-router"} {
+		if _, err := resolveInstallBinary(p); err == nil {
+			t.Errorf("resolveInstallBinary(%q) should have errored", p)
+		}
+	}
+}
+
+func TestResolveInstallBinary_AcceptsAbsoluteFlag(t *testing.T) {
+	got, err := resolveInstallBinary("/opt/sbin/sing-router")
+	if err != nil {
+		t.Fatalf("resolveInstallBinary: %v", err)
+	}
+	if got != "/opt/sbin/sing-router" {
+		t.Errorf("absolute flag should pass through unchanged, got %q", got)
+	}
+}
+
+// 空 flag → 走 self-resolve；结果必须绝对路径。
+func TestResolveInstallBinary_EmptyFlagFallsBackToSelf(t *testing.T) {
+	got, err := resolveInstallBinary("")
+	if err != nil {
+		t.Fatalf("resolveInstallBinary: %v", err)
+	}
+	if !filepath.IsAbs(got) {
+		t.Errorf("self-resolved path should be absolute, got %q", got)
 	}
 }
