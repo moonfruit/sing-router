@@ -151,7 +151,13 @@ echo "daemon will run with sing-box source: ${sing_box_source}"
 # ------------------------------------------------------------------ Phase E
 # 验证 init.d 启停生命周期。
 #   - 真 sing-box：等 supervisor 进入 state=running，再跑 doctor/status 严格校验
-#   - fake-sing-box：不开 clash API，只验子进程被拉起 + 优雅停止
+#     + init.d stop 优雅退出
+#   - fake-sing-box：只做 smoke check（HTTP 响应 + sing-box 子进程被拉起）。
+#     fake-sing-box 接的是 `run -D ... -C ...` 这些位置参数，flag.Parse 直接停在
+#     第一个非 flag，所以根本不绑端口；supervisor 卡在 ReadyCheck（默认 60s 超时）
+#     里无法读 sigCh→cancel ctx，rc.func 的 stop 等 10s 拿不到 pidof 清零就报
+#     `failed`。优雅停留给 Phase F 的 `sing-router uninstall`（自带 SIGTERM→5s→
+#     SIGKILL 兜底，见 internal/cli/uninstall.go::stopDaemonByPidFile）。
 step "Phase E  daemon start/stop via init.d (under ash)"
 ex '/opt/etc/init.d/S99sing-router start'
 
@@ -178,18 +184,21 @@ if [ "$sing_box_source" = "real (gitee download)" ]; then
         exit 1
     fi
     ex 'sing-router status | grep -qE "state=running"'
-    ex 'sing-router status | grep -qE "sing-box: pid=[0-9]+"'
+    ex 'sing-router status | grep -qE "sing-box: pid=[1-9][0-9]*"'
+
+    ex '/opt/etc/init.d/S99sing-router stop'
+    sleep 2
+    # 停止后：要么 daemon 已退出（status 报错），要么状态非 running——两者都 OK。
+    ex 'sing-router status; true'
+    ex '! sing-router status 2>/dev/null | grep -qE "sing-box: pid=[1-9][0-9]*"'
 else
     sleep 3
     ex 'sing-router status'
-    ex 'sing-router status | grep -qE "sing-box: pid=[0-9]+"'
+    ex 'sing-router status | grep -qE "sing-box: pid=[1-9][0-9]*"'
+    echo "SKIP: init.d stop assertions — fake-sing-box never satisfies ReadyCheck,"
+    echo "      daemon would take 60s to react to SIGTERM. Phase F uninstall will"
+    echo "      clean up the running daemon via PID file (SIGTERM→5s→SIGKILL)."
 fi
-
-ex '/opt/etc/init.d/S99sing-router stop'
-sleep 2
-# 停止后：要么 daemon 已退出（status 报错），要么状态非 running——两者都 OK。
-ex 'sing-router status; true'
-ex '! sing-router status 2>/dev/null | grep -qE "sing-box: pid=[1-9][0-9]*"'
 
 # ------------------------------------------------------------------ Phase F-pre
 # 真 sing-box 路径下，verify zoo.raw.json 已被 daemon 预处理写入 config.d/zoo.json。

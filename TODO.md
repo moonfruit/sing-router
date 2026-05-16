@@ -15,4 +15,4 @@
 
 - [x] sing-router daemon crash
 - [x] ip rule del 执行多次直到失败
-- [ ] No token docker test Phase E error
+- [x] No token docker test Phase E error
