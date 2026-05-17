@@ -1,14 +1,17 @@
 #!/usr/bin/env bash
 # S6 ip rule 幂等 + teardown 清净 —— 调查 + 回归
 #
-# 背景：ip rule 没有 replace 动词，原本 startup.sh / reapply-routes.sh 直接
-# `ip rule add`（不幂等），每次 boot / restart / HUP 都多堆一条
-# `fwmark $ROUTE_MARK lookup $ROUTE_TABLE`；teardown.sh 又只 del 一条 → 残留。
-# 修复后：startup.sh / reapply-routes.sh 改「先 while-del 再 add」（幂等 + 自愈），
+# 背景：ip rule 没有 replace 动词，原本 startup.sh 直接 `ip rule add`（不幂等），
+# 每次 boot / restart / HUP 都多堆一条 `fwmark $ROUTE_MARK lookup $ROUTE_TABLE`；
+# teardown.sh 又只 del 一条 → 残留。
+# 修复后：startup.sh 改「先 while-del 再 add」（幂等 + 自愈），
 # teardown.sh 改「while-del 删到失败」（一次清净全部累积）。
 #
+# 注：原 reapply-routes.sh 已随简化重启流程删除；现在 ip rule 的安装/重装
+# 完全由 startup.sh 负责（restart 也走 Shutdown→Startup 两段，跑 startup.sh）。
+#
 # 本用例验证两侧：
-#   part 1  连做 restart，ip rule 不再累积（脚本幂等）
+#   part 1  连做 restart，ip rule 不再累积（startup.sh 幂等）
 #   part 2  手工种入重复规则，模拟历史残留 / 外部污染
 #   part 3  stop → teardown 必须把全部（含手工种入的）清掉
 set -u
@@ -20,16 +23,20 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 require_running
 # part 2 会在 daemon 仍 running 时手工种入重复 ip rule。若用例在 part 2/3 之间提前
 # 退出，restore_to_running 见状态 running 即 no-op，种入的规则会残留。trap 里强制
-# restart 一轮：stop 的 teardown 循环删除清掉全部累积，start 的 startup 幂等装回一条。
-trap 'rsh "$SINGROUTER restart" >/dev/null 2>&1 || true; restore_to_running' EXIT
+# restart 一轮（--force 绕节流，保证清理一定生效）：Shutdown 的 teardown 循环删除
+# 清掉全部累积，Startup 的 startup 幂等装回一条。
+trap 'rsh "$SINGROUTER restart --force" >/dev/null 2>&1 || true; restore_to_running' EXIT
 
 before="$(iprule_table_count)"
 note "起始：指向 table $ROUTE_TABLE 的 ip rule = ${before}"
 
-# ---- part 1: restart 不应累积（startup.sh / reapply-routes.sh 幂等）----
-note "连做 3 次 sing-router restart，验证 ip rule 不累积"
+# ---- part 1: restart 不应累积（startup.sh 幂等）----
+# 必须用 --force 绕 2s 节流闸门——否则连发 3 次只有第 1 次真跑 Shutdown+Startup，
+# 第 2/3 次被 throttle 跳过（HTTP 429，CLI 退出非 0 被 `|| true` 容忍），等于只测
+# 了 1 次重启的幂等性。`--force` 让每次都真的走完一遍 startup.sh。
+note "连做 3 次 sing-router restart --force，验证 ip rule 不累积"
 for _ in 1 2 3; do
-    rsh "$SINGROUTER restart" >/dev/null 2>&1 || true
+    rsh "$SINGROUTER restart --force" >/dev/null 2>&1 || true
     wait_state running 60 || note "  restart 后未及时回 running，继续"
 done
 after_restart="$(iprule_table_count)"

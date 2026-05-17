@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# D6 资源过 check 但 sing-box run 失败 → applier revert + RecoverFromFailedApply 用旧配置拉回
+# D6 资源过 check 但 sing-box run 失败 → applier revert + RestartForce 用旧配置拉回（绕节流）
 set -u
 export CASE_ID="D6"
 HERE="$(cd "$(dirname "$0")" && pwd)"

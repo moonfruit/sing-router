@@ -15,8 +15,8 @@ import (
 
 // newUpdateCmd 提供 `sing-router update [sing-box|cn|zoo|all] [--apply]`:
 // 从 gitee/公网拉最新资源到 rundir。默认仅下载,保留手动节奏(用户自己调
-// `restart` / `reload-cn-ipset` / `apply`);加 --apply 时下载完直接 POST
-// /api/v1/apply 让 daemon 走 Applier 流程把变化落地(需要 daemon 在跑)。
+// `restart` 或 `apply`);加 --apply 时下载完直接 POST /api/v1/apply
+// 让 daemon 走 Applier 4 阶段流程把变化落地(需要 daemon 在跑)。
 //
 // 对于 sing-box,--apply 路径不在 CLI 里 rename staging,而是把 bin/sing-box.new
 // 留给 daemon 端 Applier 做 backup+rename(确保 restart 失败可 revert)。
@@ -106,11 +106,15 @@ func newUpdateCmd() *cobra.Command {
 				return nil
 			}
 			client := NewHTTPClient(getDaemonBase(cmd))
-			if err := client.PostJSON("/api/v1/apply", nil, nil); err != nil {
+			path := "/api/v1/apply"
+			if target != "all" {
+				path = fmt.Sprintf("/api/v1/apply?resource=%s", target)
+			}
+			if err := client.PostJSON(path, nil, nil); err != nil {
 				if IsDaemonNotRunning(err) {
 					return fmt.Errorf("--apply requires the daemon to be running; start it first")
 				}
-				return fmt.Errorf("POST /api/v1/apply: %w", err)
+				return fmt.Errorf("POST %s: %w", path, err)
 			}
 			fmt.Fprintln(out, "✓ apply: triggered daemon-side apply (see daemon logs for outcome)")
 			return nil

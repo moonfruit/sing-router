@@ -16,8 +16,6 @@ import (
 var scriptMap = map[string]string{
 	"startup":               "shell/startup.sh",
 	"teardown":              "shell/teardown.sh",
-	"reload-cn-ipset":       "shell/reload-cn-ipset.sh",
-	"reapply-routes":        "shell/reapply-routes.sh",
 	"init.d":                "initd/S99sing-router",
 	"merlin/nat-start":      "firmware/merlin/nat-start.snippet",
 	"merlin/services-start": "firmware/merlin/services-start.snippet",
@@ -54,7 +52,7 @@ func newScriptCmd() *cobra.Command {
 	var remote bool
 	cmd := &cobra.Command{
 		Use:   "script <name>",
-		Short: "Print embedded script (startup|teardown|reload-cn-ipset|reapply-routes|init.d|merlin/nat-start|merlin/services-start|koolshare/N99)",
+		Short: "Print embedded script (startup|teardown|init.d|merlin/nat-start|merlin/services-start|koolshare/N99)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
@@ -74,7 +72,7 @@ func newScriptCmd() *cobra.Command {
 			data, err := loadScript(name)
 			if err != nil {
 				if strings.HasPrefix(err.Error(), "unknown script") {
-					return fmt.Errorf("%w (one of: startup, teardown, reload-cn-ipset, reapply-routes, init.d, merlin/nat-start, merlin/services-start, koolshare/N99)", err)
+					return fmt.Errorf("%w (one of: startup, teardown, init.d, merlin/nat-start, merlin/services-start, koolshare/N99)", err)
 				}
 				return err
 			}

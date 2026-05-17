@@ -124,7 +124,7 @@ step "Phase C  busybox ash compatibility (static -n + dynamic exec)"
 # 静态：实际落盘的 #!/bin/sh 脚本必须能被 busybox ash 解析
 ex 'busybox sh -n /opt/etc/init.d/S99sing-router'
 ex 'busybox sh -n /koolshare/init.d/N99sing-router.sh'
-# 动态：N99sing-router.sh 直接 exec（其内部走 reapply-rules 路径）
+# 动态：N99sing-router.sh 直接 exec（其内部走 `sing-router restart` 路径）
 ex '/koolshare/init.d/N99sing-router.sh start_nat'
 # startup.sh / teardown.sh 嵌在二进制里，runner 直接读 embed → 不落盘；
 # 它们的 ash 兼容性由 assets/embed_test.go 的单元测试守住。

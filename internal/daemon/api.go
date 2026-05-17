@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"maps"
 	"net/http"
 	"os"
@@ -19,14 +20,14 @@ type APIDeps struct {
 	Rundir     string
 	LogFile    string // active sing-router.log 绝对路径；通过 status 暴露给 CLI logs 默认路径推断
 
-	// 给 reapply-rules / check / reload-cn-ipset / apply 的 hook
-	ReapplyRules  func(context.Context) error
-	CheckConfig   func(context.Context) error
-	ReloadCNIpset func(context.Context) error // 仅重建 cn ipset,不动 iptables 规则
-	ApplyPending  func(context.Context) error // 把当前磁盘上的 staging/raw 资源真正生效(CLI --apply)
-	StatusExtra   func() map[string]any
-	ScriptByName  func(name string) ([]byte, error)
-	ShutdownHook  func() // 通常关 ctx 让 main 退出
+	CheckConfig  func(context.Context) error
+	// Apply 是 /api/v1/apply 的入口；按 ?resource= query 决定处理范围
+	// （sing-box / zoo / cn / all，默认 all）。把当前磁盘上的 staging/raw 资源
+	// 真正生效（走 Applier 4 阶段；详见 Applier.Apply）。
+	Apply        func(ctx context.Context, kinds []Resource) error
+	StatusExtra  func() map[string]any
+	ScriptByName func(name string) ([]byte, error)
+	ShutdownHook func() // 通常关 ctx 让 main 退出
 }
 
 // NewMux 注册所有端点到一个 http.ServeMux。
@@ -62,7 +63,20 @@ func NewMux(deps APIDeps) *http.ServeMux {
 			writeError(w, http.StatusMethodNotAllowed, "method.not_allowed", "POST required", nil)
 			return
 		}
-		if err := deps.Supervisor.Restart(r.Context()); err != nil {
+		// ?force=true 走 RestartForce 绕节流——固件钩子刚拆完 iptables 又调
+		// restart 命中 2s 节流窗口时规则不会恢复；必须生效的调用方应显式置 force。
+		restart := deps.Supervisor.Restart
+		if r.URL.Query().Get("force") == "true" {
+			restart = deps.Supervisor.RestartForce
+		}
+		err := restart(r.Context())
+		if errors.Is(err, ErrRestartThrottled) {
+			// 与"已重启"显式区分：429 Too Many Requests + sentinel code 让调用方知情。
+			writeError(w, http.StatusTooManyRequests, "restart.throttled",
+				err.Error()+" (pass ?force=true if this restart MUST take effect)", nil)
+			return
+		}
+		if err != nil {
 			writeError(w, http.StatusConflict, "daemon.state_conflict", err.Error(), nil)
 			return
 		}
@@ -88,50 +102,17 @@ func NewMux(deps APIDeps) *http.ServeMux {
 			writeError(w, http.StatusMethodNotAllowed, "method.not_allowed", "POST required", nil)
 			return
 		}
-		if deps.ApplyPending == nil {
-			writeError(w, http.StatusNotImplemented, "not_implemented", "ApplyPending hook not wired (auto_apply / gitee token may be missing)", nil)
+		if deps.Apply == nil {
+			writeError(w, http.StatusNotImplemented, "not_implemented", "Apply hook not wired (auto_apply / gitee token may be missing)", nil)
 			return
 		}
-		if err := deps.ApplyPending(r.Context()); err != nil {
+		kinds, err := ParseResource(r.URL.Query().Get("resource"))
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "apply.bad_resource", err.Error(), nil)
+			return
+		}
+		if err := deps.Apply(r.Context(), kinds); err != nil {
 			writeError(w, http.StatusInternalServerError, "apply.failed", err.Error(), nil)
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
-	})
-	mux.HandleFunc("/api/v1/reload-cn-ipset", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			writeError(w, http.StatusMethodNotAllowed, "method.not_allowed", "POST required", nil)
-			return
-		}
-		if cur := deps.Supervisor.State(); cur != StateRunning {
-			writeError(w, http.StatusConflict, "daemon.state_conflict", "not running: "+cur.String(), nil)
-			return
-		}
-		if deps.ReloadCNIpset == nil {
-			writeError(w, http.StatusNotImplemented, "not_implemented", "ReloadCNIpset hook not wired", nil)
-			return
-		}
-		if err := deps.ReloadCNIpset(r.Context()); err != nil {
-			writeError(w, http.StatusInternalServerError, "shell.reload_cn_ipset_failed", err.Error(), nil)
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
-	})
-	mux.HandleFunc("/api/v1/reapply-rules", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			writeError(w, http.StatusMethodNotAllowed, "method.not_allowed", "POST required", nil)
-			return
-		}
-		if cur := deps.Supervisor.State(); cur != StateRunning {
-			writeError(w, http.StatusConflict, "daemon.state_conflict", "not running: "+cur.String(), nil)
-			return
-		}
-		if deps.ReapplyRules == nil {
-			writeError(w, http.StatusNotImplemented, "not_implemented", "ReapplyRules hook not wired", nil)
-			return
-		}
-		if err := deps.ReapplyRules(r.Context()); err != nil {
-			writeError(w, http.StatusInternalServerError, "shell.startup_failed", err.Error(), nil)
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
@@ -174,8 +155,9 @@ func (deps APIDeps) statusSnapshot() map[string]any {
 			"log_file": deps.LogFile,
 		},
 		"sing_box": map[string]any{
-			"pid":           sup.SingBoxPID(),
-			"restart_count": sup.RestartCount(),
+			"pid":               sup.SingBoxPID(),
+			"restart_count":     sup.RestartCount(),
+			"restart_in_flight": sup.RestartInFlight(),
 		},
 		"rules": map[string]any{
 			"iptables_installed": sup.IptablesInstalled(),

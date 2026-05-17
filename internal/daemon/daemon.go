@@ -16,17 +16,15 @@ import (
 
 // Options 是 daemon 入口接受的参数。
 type Options struct {
-	Rundir        string
-	Listen        string
-	Version       string
-	Emitter       *clef.Emitter
-	LogFile       string // sing-router.log 绝对路径；通过 /api/v1/status 暴露给 CLI logs 默认路径推断
-	Supervisor    *Supervisor
-	ReapplyRules  func(context.Context) error
-	CheckConfig   func(context.Context) error
-	ReloadCNIpset func(context.Context) error // 仅重建 cn ipset 不动 iptables 规则
-	StatusExtra   func() map[string]any
-	ScriptByName  func(name string) ([]byte, error)
+	Rundir       string
+	Listen       string
+	Version      string
+	Emitter      *clef.Emitter
+	LogFile      string // sing-router.log 绝对路径；通过 /api/v1/status 暴露给 CLI logs 默认路径推断
+	Supervisor   *Supervisor
+	CheckConfig  func(context.Context) error
+	StatusExtra  func() map[string]any
+	ScriptByName func(name string) ([]byte, error)
 
 	// ReopenLog 在收到 SIGHUP 时调用,用于 logrotate copytruncate 反向场景。
 	// 为 nil 时 SIGHUP 仅被吞掉(不让 Go runtime 走默认终止)。
@@ -50,20 +48,18 @@ func Run(ctx context.Context, opts Options) error {
 	defer cancel()
 
 	deps := APIDeps{
-		Supervisor:    opts.Supervisor,
-		Emitter:       opts.Emitter,
-		Version:       opts.Version,
-		Rundir:        opts.Rundir,
-		LogFile:       opts.LogFile,
-		ReapplyRules:  opts.ReapplyRules,
-		CheckConfig:   opts.CheckConfig,
-		ReloadCNIpset: opts.ReloadCNIpset,
-		StatusExtra:   opts.StatusExtra,
-		ScriptByName:  opts.ScriptByName,
-		ShutdownHook:  cancel,
+		Supervisor:   opts.Supervisor,
+		Emitter:      opts.Emitter,
+		Version:      opts.Version,
+		Rundir:       opts.Rundir,
+		LogFile:      opts.LogFile,
+		CheckConfig:  opts.CheckConfig,
+		StatusExtra:  opts.StatusExtra,
+		ScriptByName: opts.ScriptByName,
+		ShutdownHook: cancel,
 	}
 	if opts.Applier != nil {
-		deps.ApplyPending = opts.Applier.ApplyPending
+		deps.Apply = opts.Applier.Apply
 	}
 	mux := NewMux(deps)
 

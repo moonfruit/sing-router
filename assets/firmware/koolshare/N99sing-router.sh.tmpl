@@ -25,13 +25,14 @@ fi
 
 case "$ACTION" in
     start_nat|"" )
-        log "reapply-rules start (action=$ACTION)"
-        OUT=$("$BINARY" reapply-rules 2>&1)
+        # --force 绕节流：固件 start_nat 通常意味着 iptables 刚被 flush，必须真生效。
+        log "restart --force start (action=$ACTION)"
+        OUT=$("$BINARY" restart --force 2>&1)
         RC=$?
         if [ "$RC" -eq 0 ]; then
-            log "reapply-rules ok (action=$ACTION)"
+            log "restart ok (action=$ACTION)"
         else
-            log "reapply-rules FAILED rc=$RC (action=$ACTION): $OUT"
+            log "restart FAILED rc=$RC (action=$ACTION): $OUT"
         fi
         ;;
     * )

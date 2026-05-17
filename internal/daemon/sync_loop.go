@@ -81,24 +81,27 @@ func runSyncOnce(ctx context.Context, u *syncpkg.Updater, em *clef.Emitter, appl
 		return
 	}
 
-	// auto_apply 开启:zoo / sing-box 走完整 Applier 流程;cn.txt 走轻量 ipset reload。
-	zooOK := r.Zoo.Err == nil && r.Zoo.Changed
-	binOK := r.SingBox.Err == nil && r.SingBox.Changed
-	if zooOK || binOK {
-		stagingPath := ""
-		if binOK {
-			stagingPath = r.SingBox.StagingPath
-		}
-		if err := applier.ApplySingBoxOrZoo(ctx, zooOK, stagingPath); err != nil {
-			em.Warn("apply", "apply.failed",
-				"apply zoo/sing-box: {Err}", map[string]any{"Err": err.Error()})
-		}
+	// auto_apply 开启:只把本轮真正成功且 Changed 的资源交给 Apply 走 4 阶段，
+	// 合并到一次 Restart。避免无关资源（如旧的损坏 zoo.raw.json）阻塞本轮真变化
+	// 的资源 apply——若总是 ApplyAll，zoo preprocess 失败会让 cn.txt / sing-box
+	// 的 commit + restart 也被跳过。
+	var kinds []Resource
+	if r.SingBox.Err == nil && r.SingBox.Changed {
+		kinds = append(kinds, ResourceSingBox)
+	}
+	if r.Zoo.Err == nil && r.Zoo.Changed {
+		kinds = append(kinds, ResourceZoo)
 	}
 	if r.CNList.Err == nil && r.CNList.Changed {
-		if err := applier.ApplyCNList(ctx); err != nil {
-			em.Warn("apply", "apply.cn_ipset.error",
-				"apply cn.txt: {Err}", map[string]any{"Err": err.Error()})
-		}
+		kinds = append(kinds, ResourceCN)
+	}
+	if len(kinds) == 0 {
+		return
+	}
+	if err := applier.Apply(ctx, kinds); err != nil {
+		em.Warn("apply", "apply.failed",
+			"apply resources {Kinds}: {Err}",
+			map[string]any{"Kinds": kinds, "Err": err.Error()})
 	}
 }
 

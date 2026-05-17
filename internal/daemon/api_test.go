@@ -102,14 +102,35 @@ func readBody(t *testing.T, r *http.Response) string {
 	return b.String()
 }
 
-func TestAPIReapplyRulesRequiresRunning(t *testing.T) {
-	// supervisor 默认在 booting 态 → reapply-rules 应当 409
+func TestAPIApplyResourceQuery(t *testing.T) {
+	// /api/v1/apply?resource=cn 应把 ResourceCN 传给 Apply hook。
 	sup := New(SupervisorConfig{Emitter: newTestEmitter(t)})
-	mux := NewMux(APIDeps{Supervisor: sup, ReapplyRules: func(_ context.Context) error { return nil }})
+	var gotKinds []Resource
+	mux := NewMux(APIDeps{Supervisor: sup, Apply: func(_ context.Context, kinds []Resource) error {
+		gotKinds = kinds
+		return nil
+	}})
 	ts := httptest.NewServer(mux)
 	defer ts.Close()
-	resp, _ := http.Post(ts.URL+"/api/v1/reapply-rules", "application/json", nil)
-	if resp.StatusCode != 409 {
+	resp, _ := http.Post(ts.URL+"/api/v1/apply?resource=cn", "application/json", nil)
+	if resp.StatusCode != 200 {
 		t.Fatalf("status: %d", resp.StatusCode)
+	}
+	if len(gotKinds) != 1 || gotKinds[0] != ResourceCN {
+		t.Fatalf("kinds: %v want [ResourceCN]", gotKinds)
+	}
+	// 不传 query 时默认 all
+	gotKinds = nil
+	resp2, _ := http.Post(ts.URL+"/api/v1/apply", "application/json", nil)
+	if resp2.StatusCode != 200 {
+		t.Fatalf("status: %d", resp2.StatusCode)
+	}
+	if len(gotKinds) != len(AllResources) {
+		t.Fatalf("kinds: %v want AllResources", gotKinds)
+	}
+	// 非法 resource 返 400
+	resp3, _ := http.Post(ts.URL+"/api/v1/apply?resource=bogus", "application/json", nil)
+	if resp3.StatusCode != 400 {
+		t.Fatalf("status: %d want 400", resp3.StatusCode)
 	}
 }

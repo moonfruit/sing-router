@@ -12,7 +12,6 @@ type State int
 const (
 	StateBooting State = iota
 	StateRunning
-	StateReloading
 	StateDegraded
 	StateStopping
 	StateStopped
@@ -25,8 +24,6 @@ func (s State) String() string {
 		return "booting"
 	case StateRunning:
 		return "running"
-	case StateReloading:
-		return "reloading"
 	case StateDegraded:
 		return "degraded"
 	case StateStopping:
@@ -46,8 +43,9 @@ type StateMachine struct {
 	current State
 }
 
-// NewStateMachine 初始 booting。
-func NewStateMachine() *StateMachine { return &StateMachine{current: StateBooting} }
+// NewStateMachine 初始 stopped——daemon 还未调 Boot 时未启动。Boot 内部会先调
+// Startup → transition(Booting)，stopped → booting 已在 allowed 表中。
+func NewStateMachine() *StateMachine { return &StateMachine{current: StateStopped} }
 
 // Current 返回当前 state。
 func (s *StateMachine) Current() State {
@@ -58,17 +56,19 @@ func (s *StateMachine) Current() State {
 
 // allowed 描述合法的 (from→to) 关系。
 //
-// StateFatal → StateReloading 仅供 Supervisor.RecoverFromFailedApply 使用 ——
-// Applier 在 auto-apply 流程中失败 revert 旧文件后,需要让 sing-box 用回旧 config
-// 起来。不要把这条转移暴露到 HTTP API 或其它代码路径,以免破坏 Fatal 终态的语义。
+// 重启路径已被简化为「Shutdown + Startup」两段，没有独立 Reloading 态——
+// 「正在重启」由 Supervisor.restartInFlight 字段承担（不入状态机），
+// Restart 内部依次经过 Stopping → Stopped → Booting → Running。
+//
+// Fatal → Booting 仅供 RestartForce（Applier 失败 revert 后兜底）使用——
+// 普通代码路径仍应把 Fatal 当作终态。
 var allowed = map[State]map[State]bool{
-	StateBooting:   {StateRunning: true, StateFatal: true, StateStopping: true},
-	StateRunning:   {StateReloading: true, StateDegraded: true, StateStopping: true},
-	StateReloading: {StateRunning: true, StateFatal: true, StateStopping: true, StateReloading: true /* RecoverFromFailedApply 在 reloading 中失败仍允许再次 reload */},
-	StateDegraded:  {StateRunning: true, StateStopping: true},
-	StateStopping:  {StateStopped: true, StateFatal: true, StateBooting: true /* shutdown 中途取消极少见，但保留可能 */},
-	StateStopped:   {StateBooting: true, StateStopping: true},
-	StateFatal:     {StateStopping: true, StateReloading: true /* 仅 Applier revert 后用 */},
+	StateBooting:  {StateRunning: true, StateFatal: true, StateStopping: true},
+	StateRunning:  {StateDegraded: true, StateStopping: true},
+	StateDegraded: {StateStopping: true},
+	StateStopping: {StateStopped: true, StateFatal: true},
+	StateStopped:  {StateBooting: true},
+	StateFatal:    {StateStopping: true, StateBooting: true},
 }
 
 // Transition 切换状态；非法转移返回 error，不改变当前 state。

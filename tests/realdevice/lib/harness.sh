@@ -209,14 +209,16 @@ require_running() {
     [ "$p" = PROXY ] || skip "前置不满足：probe=${p}（需 PROXY）"
 }
 
-# restore_to_running : 用例结束 best-effort 把服务恢复到 running（trap EXIT 用）
+# restore_to_running : 用例结束 best-effort 把服务恢复到 running（trap EXIT 用）。
+# 用 `restart --force` 绕节流：用例可能刚跑过一次 restart，紧接着这次兜底落在
+# 2s 节流窗口内会被 skip，导致 daemon 留在中间态。兜底必须真生效。
 restore_to_running() {
     local st
     st="$(daemon_state)"
     case "$st" in
         running) return 0 ;;
         offline) rsh "$INITD restart >/dev/null 2>&1 || $INITD start >/dev/null 2>&1 || true" ;;
-        *)       rsh "$SINGROUTER restart >/dev/null 2>&1 || $INITD restart >/dev/null 2>&1 || true" ;;
+        *)       rsh "$SINGROUTER restart --force >/dev/null 2>&1 || $INITD restart >/dev/null 2>&1 || true" ;;
     esac
     wait_state running 120 || note "restore_to_running: 120s 后仍非 running —— 需人工检查"
 }
@@ -311,9 +313,12 @@ restore_cn_txt() {
     rsh "test -f $RUNDIR/var/cn.txt.testbak && mv -f $RUNDIR/var/cn.txt.testbak $RUNDIR/var/cn.txt || true"
 }
 
-# apply_via_api → 打印 POST /api/v1/apply 的 HTTP code（200/500/501...）
+# apply_via_api [resource] → 打印 POST /api/v1/apply 的 HTTP code（200/500/501...）
+# resource 可选：sing-box | zoo | cn | all（默认 all，等价不传 query）
 apply_via_api() {
-    rsh "curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:9998/api/v1/apply"
+    local q=""
+    [ "${1:-}" != "" ] && [ "${1:-}" != "all" ] && q="?resource=$1"
+    rsh "curl -s -o /dev/null -w '%{http_code}' -X POST 'http://127.0.0.1:9998/api/v1/apply${q}'"
 }
 
 # block_host <hostname> : 解析 host 的 IP 并在路由器 OUTPUT 链 REJECT（仅影响路由器自身出站）

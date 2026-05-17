@@ -9,7 +9,7 @@ import (
 	"testing/fstest"
 )
 
-const testKoolshareTemplate = "#!/bin/sh\nBINARY=\"{{.Binary}}\"\n[ -x \"$BINARY\" ] && \"$BINARY\" reapply-rules\nexit 0\n"
+const testKoolshareTemplate = "#!/bin/sh\nBINARY=\"{{.Binary}}\"\n[ -x \"$BINARY\" ] && \"$BINARY\" restart --force\nexit 0\n"
 
 func newTestKoolshare(t *testing.T) *koolshare {
 	t.Helper()

@@ -10,44 +10,87 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 
 	"github.com/moonfruit/sing2seq/clef"
 )
 
-// Applier 把 sync.Updater 拉到的资源真正应用到运行中的 sing-box:
+// Resource 是 Applier 能识别的资源种类。
+type Resource int
+
+const (
+	ResourceSingBox Resource = iota
+	ResourceZoo
+	ResourceCN
+)
+
+// AllResources 是 Applier 默认处理的全部资源（按确定顺序）。
+var AllResources = []Resource{ResourceSingBox, ResourceZoo, ResourceCN}
+
+// String 返回对外暴露给 CLI/HTTP 的资源名（与 `update [kind]` 子命令对齐）。
+func (r Resource) String() string {
+	switch r {
+	case ResourceSingBox:
+		return "sing-box"
+	case ResourceZoo:
+		return "zoo"
+	case ResourceCN:
+		return "cn"
+	default:
+		return "unknown"
+	}
+}
+
+// ParseResource 把 CLI/HTTP 传入的资源名解析成 Resource。空串 / "all" → AllResources。
+func ParseResource(s string) ([]Resource, error) {
+	switch s {
+	case "", "all":
+		return AllResources, nil
+	case "sing-box":
+		return []Resource{ResourceSingBox}, nil
+	case "zoo":
+		return []Resource{ResourceZoo}, nil
+	case "cn":
+		return []Resource{ResourceCN}, nil
+	default:
+		return nil, fmt.Errorf("unknown resource %q (want sing-box | zoo | cn | all)", s)
+	}
+}
+
+// Applier 把 sync.Updater 拉到的资源真正应用到运行中的 sing-box。
 //
-//   - sing-box 二进制(rundir/bin/sing-box.new)与 zoo.raw.json 触发完整的
-//     "备份 → 落盘 → sha256 闸门 → CheckConfig → Restart → 失败 revert" 流程。
-//   - cn.txt 走轻量路径:仅 reload ipset,不重启 sing-box。
+// 4 阶段统一流程（详见 Apply）：
 //
-// 真有变化才动手(硬约束):每条路径都以最终产物的 sha256 与上次成功 apply 的快照
-// 比对,完全相同则 no-op,把上游 etag 假信号挡掉。
+//   - stage：识别每个资源是否有新内容（sing-box.new 存在 / zoo.raw.json 触发预处理 /
+//     cn.txt sha256 与 apply-state.json 不同）。
+//   - validate：对 sing-box+zoo 跑 CheckConfig（cn.txt 不需要 check，startup.sh 直接读）。
+//   - commit：rename staging → 目标路径；备份保留在 var/apply-backup/。
+//   - restart：任何资源真变化 → sup.Restart；失败 → revert 全部 + sup.RestartForce。
+//
+// sha256 闸门保证「上游 etag 假信号」不会触发 Restart——内容真变化才动手。
 type Applier struct {
 	Rundir    string
-	ConfigDir string // 相对 rundir,例如 "config.d"
+	ConfigDir string // 相对 rundir，例如 "config.d"
 
 	Emitter *clef.Emitter
 
-	// Restart 触发 Supervisor.Restart;失败时 Applier 会调 Recover 恢复旧配置。
+	// Restart 把 sing-box 重新拉起来。**必须装绕节流的回调**（wireup 装 sup.RestartForce）：
+	// Applier 自己有 sha256 闸门保证只在真有变化时进入第 4 阶段，如果再被外层 2s 节流挡掉
+	// 返回 ErrRestartThrottled，已 commit 的新资源会跟运行中的旧 sing-box 失步，且
+	// apply-state 会写入新 hash → 下次 sync 永远不会重试（彻底失效）。
 	Restart func(ctx context.Context) error
-	// Recover 等价于 Supervisor.RecoverFromFailedApply,允许从 Fatal/Reloading
-	// 回到 Reloading→Running,把 sing-box 用 revert 后的旧 config 拉回来。
-	Recover func(ctx context.Context) error
 
 	// CheckConfig 用新二进制 + 新 config.d 跑 `sing-box check`。
 	CheckConfig func(ctx context.Context) error
 
-	// PreprocessZoo 重新跑 PreprocessZooFile + EnsureRequiredRuleSets,把
+	// PreprocessZoo 重新跑 PreprocessZooFile + EnsureRequiredRuleSets，把
 	// var/zoo.raw.json 翻译成 config.d/zoo.json 与 config.d/rule-set.json。
-	// 通常在 wireup 时绑定 rawURL/ref/required 列表(避免 daemon 包反向依赖 config 包)。
+	// 通常在 wireup 时绑定 rawURL/ref/required 列表（避免 daemon 包反向依赖 config 包）。
 	PreprocessZoo func() error
-
-	// ReloadCNIpset 跑 reload-cn-ipset.sh,仅重建 cn ipset 不动 iptables 规则。
-	ReloadCNIpset func(ctx context.Context) error
 }
 
-// applyState 持久化到 var/apply-state.json,记录上次成功 apply 的各资源 sha256;
-// daemon 重启后读回,允许在下次 sync 时识别"上游 etag 变化但内容未变"的假信号。
+// applyState 持久化到 var/apply-state.json，记录上次成功 apply 的各资源 sha256；
+// daemon 重启后读回，允许在下次 sync 时识别"上游 etag 变化但内容未变"的假信号。
 type applyState struct {
 	SingBox     string `json:"sing_box,omitempty"`
 	ZooJSON     string `json:"zoo_json,omitempty"`
@@ -63,38 +106,66 @@ const (
 	singBoxRelPath    = "bin/sing-box"
 )
 
-// ApplySingBoxOrZoo 在 zoo.raw.json 或 sing-box 二进制有变化时执行:
+// ApplyAll 是 sync_loop 用的默认入口：处理 sing-box / zoo / cn.txt 三种资源。
+func (a *Applier) ApplyAll(ctx context.Context) error {
+	return a.Apply(ctx, AllResources)
+}
+
+// Apply 按 kinds 限定的范围跑 4 阶段流程，一轮最多调 1 次 sup.Restart——
+// 避免「sing-box+zoo+cn 同时变化时各自调一次 Restart，第二次被 throttle 丢动作」。
 //
-//  1. 备份现行 zoo.json / rule-set.json(in-memory)+ sing-box bin(rename 到 backup);
-//  2. 提交 staging:rename bin/sing-box.new → bin/sing-box;调 PreprocessZoo 重写
-//     config.d/zoo.json + rule-set.json;
-//  3. 真变化闸门:对 zoo.json / rule-set.json / sing-box 算 sha256,全部与备份一致
-//     → 视为 etag 假信号,**不重启**,更新 apply-state 后返回 nil;
-//  4. CheckConfig:用新二进制验整套 config.d;失败 → revert 全部备份 + warn + 返 nil;
-//  5. Restart:失败 → revert 全部备份 + RecoverFromFailedApply + 返 error。
-//
-// binStagingPath != "" 表示 sing-box.new 存在需要被安装;为空表示仅 zooChanged。
-func (a *Applier) ApplySingBoxOrZoo(ctx context.Context, zooChanged bool, binStagingPath string) error {
-	binChanged := binStagingPath != ""
-	if !zooChanged && !binChanged {
-		return nil
+// kinds 为空时 = 全部资源（等价 AllResources）。单一资源（如 ["sing-box"]）
+// 时退化为「只处理该资源」，CheckConfig / Restart / Revert 全部仅作用于它。
+func (a *Applier) Apply(ctx context.Context, kinds []Resource) error {
+	if len(kinds) == 0 {
+		kinds = AllResources
 	}
+	wantBin := slices.Contains(kinds, ResourceSingBox)
+	wantZoo := slices.Contains(kinds, ResourceZoo)
+	wantCN := slices.Contains(kinds, ResourceCN)
 
 	zooPath := filepath.Join(a.Rundir, a.ConfigDir, zooFileName)
 	rulePath := filepath.Join(a.Rundir, a.ConfigDir, ruleSetFileName)
 	binPath := filepath.Join(a.Rundir, singBoxRelPath)
+	binStaging := filepath.Join(a.Rundir, singBoxRelPath+".new")
 	backupBinPath := filepath.Join(a.Rundir, applyBackupSubdir, "sing-box")
+	cnPath := filepath.Join(a.Rundir, "var", "cn.txt")
 
-	// --- Step 1: backup (zoo/rule-set in memory; bin via rename to apply-backup/) ---
+	// === 1) sing-box：staging 存在即认为待安装 ===
 	var (
-		zooBackup, ruleBackup           []byte
-		zooExisted, ruleExisted         bool
-		binBackedUp                     bool
-		zooHashBefore, ruleHashBefore   string
-		binHashBefore                   string
+		binChanged    bool
+		binBackedUp   bool
+		binHashBefore string
+		binHashAfter  string
 	)
+	if wantBin {
+		if _, err := os.Stat(binStaging); err == nil {
+			binChanged = true
+			if err := os.MkdirAll(filepath.Dir(backupBinPath), 0o755); err != nil {
+				return fmt.Errorf("mkdir apply-backup: %w", err)
+			}
+			h, err := fileSHA256(binPath)
+			if err != nil && !errors.Is(err, os.ErrNotExist) {
+				return fmt.Errorf("hash current sing-box: %w", err)
+			}
+			binHashBefore = h
+			if _, statErr := os.Stat(binPath); statErr == nil {
+				if err := os.Rename(binPath, backupBinPath); err != nil {
+					return fmt.Errorf("backup sing-box: %w", err)
+				}
+				binBackedUp = true
+			}
+		}
+	}
 
-	if zooChanged {
+	// === 2) zoo：in-memory backup → 调 PreprocessZoo 直接重写 zoo.json/rule-set.json ===
+	var (
+		zooBackup, ruleBackup         []byte
+		zooExisted, ruleExisted       bool
+		zooHashBefore, ruleHashBefore string
+		zooHashAfter, ruleHashAfter   string
+	)
+	if wantZoo {
 		var err error
 		zooBackup, zooExisted, err = readIfExists(zooPath)
 		if err != nil {
@@ -107,159 +178,135 @@ func (a *Applier) ApplySingBoxOrZoo(ctx context.Context, zooChanged bool, binSta
 		zooHashBefore = sha256Bytes(zooBackup)
 		ruleHashBefore = sha256Bytes(ruleBackup)
 	}
-	if binChanged {
-		if err := os.MkdirAll(filepath.Dir(backupBinPath), 0o755); err != nil {
-			return fmt.Errorf("mkdir apply-backup: %w", err)
-		}
-		h, err := fileSHA256(binPath)
-		if err != nil && !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("hash current sing-box: %w", err)
-		}
-		binHashBefore = h
-		// rename existing bin → backup so that staging rename can succeed atomically.
-		if _, statErr := os.Stat(binPath); statErr == nil {
-			if err := os.Rename(binPath, backupBinPath); err != nil {
-				return fmt.Errorf("backup sing-box: %w", err)
-			}
-			binBackedUp = true
-		}
-	}
 
-	// --- Step 2: commit staging artifacts (binary first, then zoo/rule-set) ---
+	// commit sing-box（rename staging → 正式路径）
 	if binChanged {
-		if err := os.Rename(binStagingPath, binPath); err != nil {
-			// Try to restore the backup so the daemon remains usable.
+		if err := os.Rename(binStaging, binPath); err != nil {
 			if binBackedUp {
 				_ = os.Rename(backupBinPath, binPath)
 			}
 			return fmt.Errorf("install sing-box: %w", err)
 		}
 	}
-	if zooChanged && a.PreprocessZoo != nil {
+	// commit zoo（PreprocessZoo 直接重写）
+	if wantZoo && a.PreprocessZoo != nil {
 		if err := a.PreprocessZoo(); err != nil {
-			// Preprocess failed: revert any partial state.
-			a.revert(zooChanged, binChanged, zooPath, rulePath, binPath, backupBinPath,
+			a.revert(wantZoo, binChanged, zooPath, rulePath, binPath, backupBinPath,
 				zooBackup, zooExisted, ruleBackup, ruleExisted, binBackedUp)
-			a.Emitter.Warn("apply", "apply.preprocess.failed", "zoo preprocess: {Err}",
+			a.emitWarn("apply.preprocess.failed", "zoo preprocess: {Err}",
 				map[string]any{"Err": err.Error()})
 			return nil
 		}
 	}
 
-	// --- Step 3: real-change gate ---
-	zooHashAfter, ruleHashAfter, binHashAfter, err := hashCurrent(zooPath, rulePath, binPath)
-	if err != nil {
-		a.revert(zooChanged, binChanged, zooPath, rulePath, binPath, backupBinPath,
-			zooBackup, zooExisted, ruleBackup, ruleExisted, binBackedUp)
-		return fmt.Errorf("hash artifacts: %w", err)
+	// === 3) 真变化闸门（sing-box / zoo） ===
+	zooDelta := false
+	ruleDelta := false
+	binDelta := false
+	if wantZoo || binChanged {
+		var err error
+		zooHashAfter, ruleHashAfter, binHashAfter, err = hashCurrent(zooPath, rulePath, binPath)
+		if err != nil {
+			a.revert(wantZoo, binChanged, zooPath, rulePath, binPath, backupBinPath,
+				zooBackup, zooExisted, ruleBackup, ruleExisted, binBackedUp)
+			return fmt.Errorf("hash artifacts: %w", err)
+		}
+		zooDelta = wantZoo && zooHashAfter != zooHashBefore
+		ruleDelta = wantZoo && ruleHashAfter != ruleHashBefore
+		binDelta = binChanged && binHashAfter != binHashBefore
 	}
-	zooDelta := zooChanged && zooHashAfter != zooHashBefore
-	ruleDelta := zooChanged && ruleHashAfter != ruleHashBefore
-	binDelta := binChanged && binHashAfter != binHashBefore
-	if !zooDelta && !ruleDelta && !binDelta {
-		// 没有任何产物实际变化 → 直接清掉 backup,记录哈希,不重启。
+
+	// === 4) cn.txt：仅判断 sha256 是否变化（不需要 staging；startup.sh 重启时直接读） ===
+	var (
+		cnDelta      bool
+		cnHashAfter  string
+	)
+	if wantCN {
+		h, err := fileSHA256(cnPath)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			a.revert(wantZoo, binChanged, zooPath, rulePath, binPath, backupBinPath,
+				zooBackup, zooExisted, ruleBackup, ruleExisted, binBackedUp)
+			return fmt.Errorf("hash cn.txt: %w", err)
+		}
+		if h != "" {
+			st, _ := a.loadApplyState()
+			if h != st.CNTxt {
+				cnDelta = true
+				cnHashAfter = h
+			}
+		}
+	}
+
+	// === 5) 任一资源真变化 → CheckConfig + Restart；否则 no-op return ===
+	if !zooDelta && !ruleDelta && !binDelta && !cnDelta {
 		a.cleanupBackup(backupBinPath, binBackedUp)
+		// hash 没变也要更新 apply-state（避免下次 sync 因为快照空白反复尝试 commit）
 		_ = a.updateApplyState(func(s *applyState) {
-			s.SingBox = binHashAfter
-			s.ZooJSON = zooHashAfter
-			s.RuleSetJSON = ruleHashAfter
+			if wantZoo {
+				s.ZooJSON = zooHashAfter
+				s.RuleSetJSON = ruleHashAfter
+			}
+			if binChanged {
+				s.SingBox = binHashAfter
+			}
 		})
-		a.Emitter.Info("apply", "apply.noop",
-			"resources downloaded but content unchanged; no restart",
-			map[string]any{"ZooChanged": zooChanged, "BinChanged": binChanged})
+		a.emitInfo("apply.noop",
+			"resources sha256 unchanged; no restart",
+			map[string]any{"WantBin": wantBin, "WantZoo": wantZoo, "WantCN": wantCN})
 		return nil
 	}
 
-	// --- Step 4: CheckConfig ---
-	if a.CheckConfig != nil {
+	// CheckConfig 仅当 sing-box / zoo 有变化时需要
+	if (zooDelta || ruleDelta || binDelta) && a.CheckConfig != nil {
 		if err := a.CheckConfig(ctx); err != nil {
-			a.revert(zooChanged, binChanged, zooPath, rulePath, binPath, backupBinPath,
+			a.revert(wantZoo, binChanged, zooPath, rulePath, binPath, backupBinPath,
 				zooBackup, zooExisted, ruleBackup, ruleExisted, binBackedUp)
-			a.Emitter.Warn("apply", "apply.check.failed",
+			a.emitWarn("apply.check.failed",
 				"sing-box check failed; reverted: {Err}",
 				map[string]any{"Err": err.Error()})
 			return nil
 		}
 	}
 
-	// --- Step 5: Restart sing-box ---
+	// Restart（Restart 字段必须装绕节流的回调，见字段注释；下面同理）
 	if err := a.Restart(ctx); err != nil {
-		a.revert(zooChanged, binChanged, zooPath, rulePath, binPath, backupBinPath,
+		a.revert(wantZoo, binChanged, zooPath, rulePath, binPath, backupBinPath,
 			zooBackup, zooExisted, ruleBackup, ruleExisted, binBackedUp)
-		// 走 RecoverFromFailedApply 把 sing-box 按 revert 后的旧配置拉回来。
-		if rerr := a.Recover(ctx); rerr != nil {
-			a.Emitter.Error("apply", "apply.recover.failed",
-				"restart failed AND recover failed: restartErr={RestartErr} recoverErr={RecoverErr}",
+		// revert 后再调一次 Restart 把 sing-box 按旧配置拉回来。
+		if rerr := a.Restart(ctx); rerr != nil {
+			a.emitError("apply.recover.failed",
+				"restart failed AND recover-restart failed: restartErr={RestartErr} recoverErr={RecoverErr}",
 				map[string]any{"RestartErr": err.Error(), "RecoverErr": rerr.Error()})
 		} else {
-			a.Emitter.Error("apply", "apply.restart.failed",
+			a.emitError("apply.restart.failed",
 				"restart failed; reverted and recovered with previous config: {Err}",
 				map[string]any{"Err": err.Error()})
 		}
 		return err
 	}
 
-	// --- Step 6: success cleanup ---
+	// success
 	a.cleanupBackup(backupBinPath, binBackedUp)
 	_ = a.updateApplyState(func(s *applyState) {
-		s.SingBox = binHashAfter
-		s.ZooJSON = zooHashAfter
-		s.RuleSetJSON = ruleHashAfter
-	})
-	a.Emitter.Info("apply", "apply.ok",
-		"sing-box restarted with new resources (zoo={ZooChanged} bin={BinChanged})",
-		map[string]any{"ZooChanged": zooDelta || ruleDelta, "BinChanged": binDelta})
-	return nil
-}
-
-// ApplyPending 检查当前磁盘状态(sing-box.new 是否存在 + zoo/cn 是否变化)并执行
-// 对应 apply。供 HTTP `/api/v1/apply` 端点使用:CLI `update --apply` 走这条路径,
-// 让 daemon 端按 sync_loop 同样的语义把已落盘的资源真正生效。
-func (a *Applier) ApplyPending(ctx context.Context) error {
-	stagingPath := filepath.Join(a.Rundir, singBoxRelPath+".new")
-	binStaging := ""
-	if _, err := os.Stat(stagingPath); err == nil {
-		binStaging = stagingPath
-	}
-	// zooChanged=true 让 Applier 跑 Preprocess+Ensure,内部 sha256 闸门会挡住无变化。
-	if err := a.ApplySingBoxOrZoo(ctx, true, binStaging); err != nil {
-		return err
-	}
-	return a.ApplyCNList(ctx)
-}
-
-// ApplyCNList 在 cn.txt 实际变化时调 ReloadCNIpset 重建 ipset。
-// "实际变化" 用 sha256 与 apply-state.cn_txt 比对决定;一致则 no-op。
-func (a *Applier) ApplyCNList(ctx context.Context) error {
-	cnPath := filepath.Join(a.Rundir, "var", "cn.txt")
-	hash, err := fileSHA256(cnPath)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil
+		if binChanged {
+			s.SingBox = binHashAfter
 		}
-		return fmt.Errorf("hash cn.txt: %w", err)
-	}
-	st, _ := a.loadApplyState()
-	if st.CNTxt == hash {
-		a.Emitter.Info("apply", "apply.cn_ipset.noop",
-			"cn.txt downloaded but sha256 unchanged; ipset reload skipped", nil)
-		return nil
-	}
-	if a.ReloadCNIpset == nil {
-		return errors.New("ReloadCNIpset hook not wired")
-	}
-	if err := a.ReloadCNIpset(ctx); err != nil {
-		a.Emitter.Warn("apply", "apply.cn_ipset.failed",
-			"reload cn ipset: {Err}", map[string]any{"Err": err.Error()})
-		return err
-	}
-	_ = a.updateApplyState(func(s *applyState) { s.CNTxt = hash })
-	a.Emitter.Info("apply", "apply.cn_ipset.ok", "cn ipset reloaded", nil)
+		if wantZoo {
+			s.ZooJSON = zooHashAfter
+			s.RuleSetJSON = ruleHashAfter
+		}
+		if cnDelta {
+			s.CNTxt = cnHashAfter
+		}
+	})
+	a.emitInfo("apply.ok",
+		"sing-box restarted with new resources: zoo={Zoo} rule={Rule} bin={Bin} cn={CN}",
+		map[string]any{"Zoo": zooDelta, "Rule": ruleDelta, "Bin": binDelta, "CN": cnDelta})
 	return nil
 }
 
-// revert 把所有备份回滚到原位。zoo/rule-set 从 in-memory 字节回写;sing-box 从
-// apply-backup/ rename 回去。如果某项 originally 不存在(zooExisted=false 等),
+// revert 把所有备份回滚到原位。zoo/rule-set 从 in-memory 字节回写；sing-box 从
+// apply-backup/ rename 回去。如果某项 originally 不存在（zooExisted=false 等），
 // revert 时删除当前文件即可。
 func (a *Applier) revert(
 	zooChanged, binChanged bool,
@@ -281,7 +328,7 @@ func (a *Applier) revert(
 		}
 	}
 	if binChanged && binBackedUp {
-		_ = os.Remove(binPath) // 可能是失败前已 commit 的新版,删掉
+		_ = os.Remove(binPath) // 可能是失败前已 commit 的新版，删掉
 		_ = os.Rename(backupBinPath, binPath)
 	}
 }
@@ -292,7 +339,7 @@ func (a *Applier) cleanupBackup(backupBinPath string, binBackedUp bool) {
 	}
 }
 
-// loadApplyState 从 var/apply-state.json 读;不存在返回零值。
+// loadApplyState 从 var/apply-state.json 读；不存在返回零值。
 func (a *Applier) loadApplyState() (applyState, error) {
 	var s applyState
 	data, err := os.ReadFile(filepath.Join(a.Rundir, applyStateFile))
@@ -321,6 +368,27 @@ func (a *Applier) updateApplyState(mutate func(*applyState)) error {
 		return err
 	}
 	return atomicWriteFile(path, data, 0o644)
+}
+
+func (a *Applier) emitInfo(code, msg string, fields map[string]any) {
+	if a.Emitter == nil {
+		return
+	}
+	a.Emitter.Info("apply", code, msg, fields)
+}
+
+func (a *Applier) emitWarn(code, msg string, fields map[string]any) {
+	if a.Emitter == nil {
+		return
+	}
+	a.Emitter.Warn("apply", code, msg, fields)
+}
+
+func (a *Applier) emitError(code, msg string, fields map[string]any) {
+	if a.Emitter == nil {
+		return
+	}
+	a.Emitter.Error("apply", code, msg, fields)
 }
 
 // --- helpers ---
@@ -366,7 +434,7 @@ func fileSHA256(path string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// hashCurrent 同时算三个产物的 sha256;不存在的视为空串。
+// hashCurrent 同时算三个产物的 sha256；不存在的视为空串。
 func hashCurrent(zooPath, rulePath, binPath string) (zoo, rule, bin string, err error) {
 	hf := func(p string) (string, error) {
 		h, err := fileSHA256(p)

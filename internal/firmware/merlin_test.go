@@ -11,7 +11,7 @@ func newTestMerlin(t *testing.T, nv nvramReader) *merlin {
 	t.Helper()
 	a := fstest.MapFS{
 		"firmware/merlin/nat-start.snippet": &fstest.MapFile{
-			Data: []byte("# BEGIN sing-router (managed by `sing-router install`; do not edit)\n[ -x \"{{.Binary}}\" ] && \"{{.Binary}}\" reapply-rules >/dev/null 2>&1 &\n# END sing-router\n"),
+			Data: []byte("# BEGIN sing-router (managed by `sing-router install`; do not edit)\n[ -x \"{{.Binary}}\" ] && \"{{.Binary}}\" restart --force >/dev/null 2>&1 &\n# END sing-router\n"),
 		},
 		"firmware/merlin/services-start.snippet": &fstest.MapFile{
 			Data: []byte("# BEGIN sing-router (managed by `sing-router install`; do not edit)\n/opt/etc/init.d/S99sing-router start &\n# END sing-router\n"),

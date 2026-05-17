@@ -39,15 +39,33 @@ func newStopCmd() *cobra.Command {
 }
 
 func newRestartCmd() *cobra.Command {
-	return postOnlyCmd{use: "restart", short: "Restart sing-box (keep iptables)", path: "/api/v1/restart"}.build()
+	var force bool
+	cmd := &cobra.Command{
+		Use:   "restart",
+		Short: "Restart sing-box: shutdown (stop + teardown iptables) + startup",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			client := NewHTTPClient(getDaemonBase(cmd))
+			path := "/api/v1/restart"
+			if force {
+				path += "?force=true"
+			}
+			if err := client.PostJSON(path, nil, nil); err != nil {
+				if IsDaemonNotRunning(err) {
+					return fmt.Errorf("daemon not running; use `S99sing-router start` first")
+				}
+				return err
+			}
+			fmt.Fprintln(cmd.OutOrStdout(), "ok")
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&force, "force", false,
+		"Bypass the 2s restart throttle window (use for hooks that MUST take effect, e.g. firmware nat-start after flushing iptables)")
+	return cmd
 }
 
 func newCheckCmd() *cobra.Command {
 	return postOnlyCmd{use: "check", short: "Validate config.d/* via sing-box check", path: "/api/v1/check"}.build()
-}
-
-func newReapplyRulesCmd() *cobra.Command {
-	return postOnlyCmd{use: "reapply-rules", short: "Reinstall iptables/ipset (nat-start hook)", path: "/api/v1/reapply-rules"}.build()
 }
 
 func newShutdownCmd() *cobra.Command {

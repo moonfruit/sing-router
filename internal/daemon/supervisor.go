@@ -14,6 +14,11 @@ import (
 	"github.com/moonfruit/sing2seq/clef"
 )
 
+// restartThrottleWindow 是 Restart 节流闸门：上次尝试 < 此值内的 Restart 直接 skip。
+// 防止同一瞬间多个 caller（用户 + sync_loop + WAN 钩子）撞到一起反复重启 sing-box。
+// Applier 失败 revert 走 RestartForce 绕过节流。
+const restartThrottleWindow = 2 * time.Second
+
 // SupervisorConfig 控制 supervisor 行为。
 type SupervisorConfig struct {
 	Emitter       *clef.Emitter
@@ -24,28 +29,19 @@ type SupervisorConfig struct {
 	ReadyConfig ReadyConfig
 
 	StartupHook  func(context.Context) error // 在 ready 后跑 startup.sh
-	TeardownHook func(context.Context) error // 在 stop/shutdown 时拆 iptables
-	// ReapplyRoutesHook 仅装与 TUN 设备绑定的路由（default route + fwmark rule），
-	// 不动 iptables / ipset。bootStep 走 skipStartupIfInstalled 分支（Restart /
-	// RecoverFromFailedApply / Run 快速崩溃恢复）时，sing-box 杀掉重起会让
-	// 旧 utun fd 关闭→内核自动删除 `default dev utun table 7892`。startup.sh
-	// 不重跑就没人再装这条路由，所以 supervisor 在这条分支上必须主动调它。
-	// 为 nil 时该分支退化为旧行为（路由会丢），调用方应在 wireup 时注入。
-	ReapplyRoutesHook func(context.Context) error
+	TeardownHook func(context.Context) error // 在 Shutdown 时拆 iptables
 
 	// RouteHealthy 巡检 device-bound 路由（`default dev <TUN> table <N>`）是否还在。
-	// Setpgid 隔离了 shell 退出的 SIGHUP，但用户/外部脚本仍可直接
-	// `kill -HUP <sing-box-pid>` 让 sing-box reload→TUN 重建→内核删路由，而
-	// supervisor 全程不知情（pid 没变、子进程没退）。WatchRoutes 周期性调它兜底，
-	// 返回 false 即调一次 ReapplyRoutesHook 补回。为 nil 时 WatchRoutes 直接退出。
+	// 外部 `kill -HUP <sing-box-pid>` 让 sing-box reload→TUN 重建→内核删路由，但
+	// supervisor pid 没变看不到。WatchRoutes 周期调它，返回 false 触发一次 Restart
+	// 走完整 Shutdown+Startup 把路由重装。为 nil 时 WatchRoutes 不启动。
 	RouteHealthy func(context.Context) bool
 	// RouteWatchInterval 是 WatchRoutes 的巡检周期；<=0 时取默认 30s。
 	RouteWatchInterval time.Duration
 
-	BackoffMs               []int // 崩溃恢复退避序列；最后一档为封顶
-	IptablesKeepBackoffLtMs int   // < 此阈值时保持 iptables；>= 时拆
-	StopGrace               time.Duration
-	StateHookOnTransition   func(from, to State)
+	BackoffMs             []int // 崩溃恢复退避序列；最后一档为封顶
+	StopGrace             time.Duration
+	StateHookOnTransition func(from, to State)
 }
 
 // Supervisor 串行化 sing-box 子进程的全部生命周期事件。
@@ -62,15 +58,20 @@ type Supervisor struct {
 	bootAt            time.Time
 	readyAt           time.Time
 	childExited       chan struct{}
+	lastRestartAt     time.Time
+	restartInFlight   bool
+
+	// opMu 串行化 Shutdown / Startup 各自的内部步骤，防止并发 caller 撞 state machine。
+	opMu sync.Mutex
+	// restartMu 串行化整次 Restart（Shutdown+Startup 复合操作），保证 throttle 判断正确
+	// 且不会与单独的 Shutdown/Startup 调用交织。
+	restartMu sync.Mutex
 }
 
 // New 构造 Supervisor。
 func New(cfg SupervisorConfig) *Supervisor {
 	if len(cfg.BackoffMs) == 0 {
 		cfg.BackoffMs = []int{1000, 2000, 4000, 8000, 16000, 32000, 64000, 128000, 256000, 512000, 600000}
-	}
-	if cfg.IptablesKeepBackoffLtMs == 0 {
-		cfg.IptablesKeepBackoffLtMs = 10000
 	}
 	if cfg.StopGrace == 0 {
 		cfg.StopGrace = 5 * time.Second
@@ -105,20 +106,36 @@ func (s *Supervisor) RestartCount() int {
 	return s.restartCount
 }
 
-// Boot 启动 sing-box → ready → 跑 StartupHook → state=running。
-// 失败时进入 fatal。
+// RestartInFlight 报告当前是否正在执行 Restart（Shutdown→Startup 的复合操作中）。
+// 给 /status 暴露的观测点，与 state machine 解耦。
+func (s *Supervisor) RestartInFlight() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.restartInFlight
+}
+
+// Boot 是 daemon 首次启动入口：捕获 daemon 级 ctx 作为 sing-box 子进程的生命周期
+// 锚点（后续 Startup / Restart 都复用），然后调 Startup 完整跑一次。
 func (s *Supervisor) Boot(ctx context.Context) error {
 	s.mu.Lock()
 	s.bootAt = time.Now()
-	// 捕获 daemon 级 ctx 作为 sing-box 子进程的生命周期锚点。后续 Restart /
-	// RecoverFromFailedApply / Start 经 HTTP 触发时传的是请求级 r.Context()，
-	// 绝不能拿它去 exec.CommandContext —— 否则 HTTP 请求一结束子进程就被 SIGKILL。
+	// procCtx 是 daemon 级 ctx。后续 Startup 经 HTTP 触发时拿到的是请求级 ctx，
+	// 绝不能把它喂给 exec.CommandContext —— 否则 HTTP 请求一结束子进程被 SIGKILL。
 	s.procCtx = ctx
 	s.mu.Unlock()
-	return s.bootStep(ctx, false /*runHookEvenIfInstalled*/)
+	return s.Startup(ctx)
 }
 
-func (s *Supervisor) bootStep(ctx context.Context, skipStartupIfInstalled bool) error {
+// Startup：启 sing-box → 等 Ready → 跑 StartupHook → state=running。
+// 失败任何一步进 Fatal 并返回 error；调用方可自行决定是否走 Shutdown 回收。
+func (s *Supervisor) Startup(ctx context.Context) error {
+	s.opMu.Lock()
+	defer s.opMu.Unlock()
+
+	start := time.Now()
+	if err := s.sm.Transition(StateBooting); err != nil {
+		return err
+	}
 	if err := s.startSingBox(ctx); err != nil {
 		s.toFatal()
 		return err
@@ -130,30 +147,134 @@ func (s *Supervisor) bootStep(ctx context.Context, skipStartupIfInstalled bool) 
 	}
 	s.mu.Lock()
 	s.readyAt = time.Now()
-	needHook := !(skipStartupIfInstalled && s.iptablesInstalled)
 	s.mu.Unlock()
 
-	if needHook && s.cfg.StartupHook != nil {
+	if s.cfg.StartupHook != nil {
 		if err := s.cfg.StartupHook(ctx); err != nil {
+			s.killChild()
 			s.toFatal()
 			return fmt.Errorf("startup hook: %w", err)
 		}
-		s.mu.Lock()
-		s.iptablesInstalled = true
-		s.mu.Unlock()
-	} else if !needHook && s.cfg.ReapplyRoutesHook != nil {
-		// startup.sh 不重跑，但旧 utun fd 被 killChild 关掉时内核已经清掉
-		// device-bound 路由 → 必须主动重装。失败仅 best-effort，不进入 fatal
-		// （让 supervisor 继续运行，doctor / 用户手动 reapply-rules 仍可救场）。
-		_ = s.cfg.ReapplyRoutesHook(ctx)
 	}
+	s.mu.Lock()
+	s.iptablesInstalled = true
+	s.mu.Unlock()
 	s.transitionTo(StateRunning)
+	if s.cfg.Emitter != nil {
+		s.cfg.Emitter.Info("supervisor", "supervisor.startup.ok",
+			"startup completed in {DurationMs}ms",
+			map[string]any{"DurationMs": time.Since(start).Milliseconds()})
+	}
 	return nil
 }
 
+// Shutdown：拆 iptables + 停 sing-box → state=stopped。幂等：当前已 Stopping/Stopped
+// 时仍 best-effort 跑 teardown + killChild。失败仅 warn 不中断流程。
+func (s *Supervisor) Shutdown(ctx context.Context) error {
+	s.opMu.Lock()
+	defer s.opMu.Unlock()
+
+	start := time.Now()
+	cur := s.sm.Current()
+	if cur != StateStopping && cur != StateStopped {
+		// best-effort: 已是 Fatal 等转移失败也继续拆 + kill
+		_ = s.sm.Transition(StateStopping)
+	}
+	if s.cfg.TeardownHook != nil {
+		if err := s.cfg.TeardownHook(ctx); err != nil && s.cfg.Emitter != nil {
+			s.cfg.Emitter.Warn("supervisor", "supervisor.teardown.failed",
+				"teardown failed (continuing shutdown): {Err}",
+				map[string]any{"Err": err.Error()})
+		}
+	}
+	s.killChild()
+	s.mu.Lock()
+	s.iptablesInstalled = false
+	s.mu.Unlock()
+	if s.sm.Current() != StateStopped {
+		_ = s.sm.Transition(StateStopped)
+	}
+	if s.cfg.Emitter != nil {
+		s.cfg.Emitter.Info("supervisor", "supervisor.shutdown.ok",
+			"shutdown completed in {DurationMs}ms",
+			map[string]any{"DurationMs": time.Since(start).Milliseconds()})
+	}
+	return nil
+}
+
+// ErrRestartThrottled 在 Restart 命中 2s 节流闸门时返回，表示本次 Restart 被跳过，
+// sing-box 进程与 iptables 仍是上次操作后的状态。**调用方必须区分对待**：
+//   - 必须真生效的路径（Applier 成功路径 / 失败 revert / 固件钩子刚拆完 iptables 等）
+//     应改走 RestartForce 或对外报告（如 HTTP 429）让上层重试，绝不可当 nil 误以为已重启。
+//   - 用户/外部脚本重复点击场景可以容忍此返回（throttle 的正常意图）。
+var ErrRestartThrottled = errors.New("restart throttled")
+
+// Restart：Shutdown + Startup 连续调用。受 2s 节流闸门保护：上次尝试 <2s 内的
+// 调用返回 ErrRestartThrottled 让调用方决定如何处理。必须生效的路径请用 RestartForce。
+func (s *Supervisor) Restart(ctx context.Context) error {
+	s.restartMu.Lock()
+	defer s.restartMu.Unlock()
+
+	s.mu.Lock()
+	since := time.Since(s.lastRestartAt)
+	hasPrior := !s.lastRestartAt.IsZero()
+	s.mu.Unlock()
+	if hasPrior && since < restartThrottleWindow {
+		if s.cfg.Emitter != nil {
+			s.cfg.Emitter.Info("supervisor", "supervisor.restart.throttled",
+				"restart throttled (last attempt {SinceMs}ms ago, window {WindowMs}ms)",
+				map[string]any{
+					"SinceMs":  since.Milliseconds(),
+					"WindowMs": restartThrottleWindow.Milliseconds(),
+				})
+		}
+		return ErrRestartThrottled
+	}
+	return s.doRestart(ctx)
+}
+
+// RestartForce 等价 Restart 但绕过 throttle。仅供 Applier 失败 revert 后调用，
+// 保证「revert → 拉回旧配置」不会被节流卡住。不要从 HTTP/CLI 暴露。
+func (s *Supervisor) RestartForce(ctx context.Context) error {
+	s.restartMu.Lock()
+	defer s.restartMu.Unlock()
+	return s.doRestart(ctx)
+}
+
+func (s *Supervisor) doRestart(ctx context.Context) error {
+	start := time.Now()
+	s.mu.Lock()
+	s.restartInFlight = true
+	s.restartCount++
+	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		s.restartInFlight = false
+		s.lastRestartAt = time.Now()
+		s.mu.Unlock()
+	}()
+
+	_ = s.Shutdown(ctx)
+	if err := s.Startup(ctx); err != nil {
+		return err
+	}
+	if s.cfg.Emitter != nil {
+		s.cfg.Emitter.Info("supervisor", "supervisor.restart.ok",
+			"restart completed in {DurationMs}ms",
+			map[string]any{"DurationMs": time.Since(start).Milliseconds()})
+	}
+	return nil
+}
+
+// Start 是 CLI/HTTP /start 的入口，等价 Startup。
+func (s *Supervisor) Start(ctx context.Context) error { return s.Startup(ctx) }
+
+// Stop 是 CLI/HTTP /stop 的入口，等价 Shutdown。
+func (s *Supervisor) Stop(ctx context.Context) error { return s.Shutdown(ctx) }
+
 func (s *Supervisor) startSingBox(ctx context.Context) error {
 	// 子进程生命周期绑 daemon 级 procCtx，不绑调用方（可能是 HTTP 请求级）ctx。
-	// procCtx 由 Boot 捕获；若 Boot 未跑过（测试可能直接构造后调 bootStep），
+	// procCtx 由 Boot 捕获；若 Boot 未跑过（测试可能直接构造后调 Startup），
 	// 退化用调用方 ctx。
 	s.mu.Lock()
 	procCtx := s.procCtx
@@ -264,85 +385,15 @@ func (s *Supervisor) toFatal() {
 	_ = s.sm.Transition(StateFatal)
 }
 
-// Restart 走 reloading 路径。用户主动 → 不拆 iptables。
-func (s *Supervisor) Restart(ctx context.Context) error {
-	if err := s.sm.Transition(StateReloading); err != nil {
-		return err
-	}
-	s.killChild()
-	s.mu.Lock()
-	s.restartCount++
-	s.mu.Unlock()
-	return s.bootStep(ctx, true /*skipStartupIfInstalled = iptables 已装时跳过*/)
-}
-
-// RecoverFromFailedApply 用于 daemon.Applier 在 auto-apply 失败 revert 旧文件
-// 之后,把 sing-box 重新拉起来。等价于"按 revert 后的(旧)config 再来一次 Restart",
-// 但允许从 Fatal/Reloading 入口(因为 Restart 失败后 bootStep 内部已经 toFatal)。
-//
-// 不要从 HTTP API 调:Fatal → Reloading 的转移仅为这条恢复路径开放,普通代码路径
-// 仍应把 Fatal 当作终态处理。iptables 还在(Restart 路径不拆),所以走 skip-startup
-// 分支,不会重跑 startup.sh / 触动 ipset。
-func (s *Supervisor) RecoverFromFailedApply(ctx context.Context) error {
-	if err := s.sm.Transition(StateReloading); err != nil {
-		return err
-	}
-	s.killChild()
-	s.mu.Lock()
-	s.restartCount++
-	s.mu.Unlock()
-	return s.bootStep(ctx, true /*skipStartupIfInstalled*/)
-}
-
-// Stop 拆 iptables + 停 sing-box；进入 stopped。
-func (s *Supervisor) Stop(ctx context.Context) error {
-	if err := s.sm.Transition(StateStopping); err != nil {
-		return err
-	}
-	if s.cfg.TeardownHook != nil {
-		_ = s.cfg.TeardownHook(ctx)
-	}
-	s.mu.Lock()
-	s.iptablesInstalled = false
-	s.mu.Unlock()
-	s.killChild()
-	return s.sm.Transition(StateStopped)
-}
-
-// Start 从 stopped 恢复。
-func (s *Supervisor) Start(ctx context.Context) error {
-	if err := s.sm.Transition(StateBooting); err != nil {
-		return err
-	}
-	return s.bootStep(ctx, false)
-}
-
-// Shutdown 拆 iptables + 停 sing-box；不维护 stopped 态（最后退出 daemon 进程）。
-func (s *Supervisor) Shutdown(ctx context.Context) error {
-	if cur := s.sm.Current(); cur != StateStopping {
-		if err := s.sm.Transition(StateStopping); err != nil {
-			// 已是 fatal/stopped 等终止性状态，仍尝试 best-effort 拆 + kill
-			_ = err
-		}
-	}
-	if s.cfg.TeardownHook != nil {
-		_ = s.cfg.TeardownHook(ctx)
-	}
-	s.mu.Lock()
-	s.iptablesInstalled = false
-	s.mu.Unlock()
-	s.killChild()
-	return nil
-}
-
-// 反向恢复（degraded → running）的退避循环由 Run() 跑；测试中主要测 Boot。
-// Run 是阻塞的；ctx 取消时返回。
+// ErrShutdownRequested 由 Run 在 ctx 取消时返回。
 var ErrShutdownRequested = errors.New("shutdown requested")
 
+// Run 监控 sing-box 子进程；崩溃后立即 Shutdown，退避，再 Startup。
+// ctx 取消时返回 ErrShutdownRequested。
 func (s *Supervisor) Run(ctx context.Context) error {
 	for {
 		// 快照「当前监控的子进程」+「它的退出 channel」。两者必须成对取，
-		// 这样下面才能判断醒来时子进程是否已被 Restart 换成了新的。
+		// 这样下面才能判断醒来时子进程是否已被 Restart/Startup 换成了新的。
 		s.mu.Lock()
 		ch := s.childExited
 		watched := s.cmd
@@ -356,31 +407,33 @@ func (s *Supervisor) Run(ctx context.Context) error {
 		}
 
 		// ch 关闭：watched 这个子进程退出了。需要区分「真崩溃」与
-		// 「Restart / RecoverFromFailedApply / Stop 故意杀的」—— 否则 Restart 一来
-		// （它先切 Reloading 再 killChild），Run 就会因 state != Running 而 return，
-		// 监控循环永久退出，新子进程从此裸奔。
+		// 「Restart / Shutdown / Stop 故意杀的」—— 否则 Restart 一来
+		// killChild 关闭旧 channel，Run 看 state 不对就 return，监控循环死，
+		// 新子进程从此裸奔。
 		s.mu.Lock()
 		replaced := s.cmd != watched
+		inFlight := s.restartInFlight
 		s.mu.Unlock()
 		if replaced {
-			// 子进程已被 Restart/Recover 换成新的 → 这次退出是旧的、预期的。
-			// 回到循环监控新子进程。
+			// 子进程已被 Startup 换成新的 → 这次退出是预期的；回到循环监控新子进程。
 			continue
 		}
-		switch s.sm.Current() {
-		case StateRunning:
-			// 真崩溃，且尚未被替换 → 进 degraded + 退避重启（下方原逻辑）。
-		case StateReloading:
-			// Restart/Recover 已 killChild、但还没装上新子进程。略等它装好
-			// （s.cmd 变化）再继续，避免对着已关闭的旧 channel 空转。
+		if inFlight {
+			// 正在 Restart 但还没换上新子进程（位于 Shutdown 与 Startup 之间）。
+			// 短等再轮询，避免对着已关闭的旧 channel 空转。
 			select {
 			case <-ctx.Done():
 				return ErrShutdownRequested
 			case <-time.After(20 * time.Millisecond):
 			}
 			continue
+		}
+		switch s.sm.Current() {
+		case StateRunning:
+			// 真崩溃 → 下方走 Degraded + Shutdown + 退避 + Startup
 		default:
-			// Stopping / Stopped / Fatal → 子进程退出是预期的，干净退出循环。
+			// Stopping / Stopped / Fatal / Booting / Degraded：子进程退出是预期的，
+			// 或由其它 caller 接管，干净退出循环。
 			return nil
 		}
 		if err := s.sm.Transition(StateDegraded); err != nil {
@@ -388,33 +441,29 @@ func (s *Supervisor) Run(ctx context.Context) error {
 		}
 		backoffMs := s.cfg.BackoffMs[min(s.nextBackoffIdx, len(s.cfg.BackoffMs)-1)]
 		s.nextBackoffIdx++
-		if backoffMs >= s.cfg.IptablesKeepBackoffLtMs && s.cfg.TeardownHook != nil {
-			_ = s.cfg.TeardownHook(ctx)
-			s.mu.Lock()
-			s.iptablesInstalled = false
-			s.mu.Unlock()
-		}
+		// 立即拆 iptables：退避期间系统进入 DIRECT，避免「sing-box 死但 iptables
+		// 仍 REDIRECT 到 7892」的连接黑洞。
+		_ = s.Shutdown(ctx)
 		select {
 		case <-ctx.Done():
 			return ErrShutdownRequested
 		case <-time.After(time.Duration(backoffMs) * time.Millisecond):
 		}
-		if err := s.bootStep(ctx, true /*skip startup if iptables_installed*/); err != nil {
-			// Stay in degraded; loop continues to wait for child exit again
+		if err := s.Startup(ctx); err != nil {
+			// 失败 → state=Fatal，下一次循环顶部会从 Fatal 走 default → return nil。
 			continue
 		}
 		s.nextBackoffIdx = 0
 	}
 }
 
-// WatchRoutes 周期性巡检 device-bound 路由，发现丢失就调 ReapplyRoutesHook 补回。
-// 这是对外部 `kill -HUP <sing-box-pid>` 的兜底：sing-box 收到 SIGHUP 会 reload→
-// TUN inbound 重建→旧 utun fd 关闭→内核自动删 `default dev utun table 7892`，但
-// sing-box pid 没变、子进程没退，supervisor 的状态机完全观察不到这次"换 utun"。
-// RouteHealthy 或 ReapplyRoutesHook 为 nil 时直接返回（watcher 禁用）。
-// 阻塞运行，ctx 取消即返回；只在 StateRunning 下巡检（其余状态由 bootStep 兜底）。
+// WatchRoutes 周期巡检 device-bound 路由，缺失即调 Restart 走完整循环重装。
+// 兜底外部 `kill -HUP <sing-box-pid>` 触发的 sing-box reload→TUN 重建→
+// 内核自动删除路由场景（supervisor pid 没变看不到）。
+// RouteHealthy 为 nil 时直接返回（watcher 禁用）。
+// 阻塞运行，ctx 取消即返回；只在 StateRunning 下巡检。
 func (s *Supervisor) WatchRoutes(ctx context.Context) {
-	if s.cfg.RouteHealthy == nil || s.cfg.ReapplyRoutesHook == nil {
+	if s.cfg.RouteHealthy == nil {
 		return
 	}
 	interval := s.cfg.RouteWatchInterval
@@ -437,8 +486,8 @@ func (s *Supervisor) WatchRoutes(ctx context.Context) {
 		}
 		if s.cfg.Emitter != nil {
 			s.cfg.Emitter.Warn("supervisor", "supervisor.route.missing",
-				"device-bound route gone (likely external SIGHUP→sing-box reload); reapplying", nil)
+				"device-bound route gone (likely external SIGHUP→sing-box reload); restarting", nil)
 		}
-		_ = s.cfg.ReapplyRoutesHook(ctx)
+		_ = s.Restart(ctx)
 	}
 }

@@ -156,8 +156,6 @@ func realRunDaemon(ctx context.Context, rundir string) error {
 	}
 	startup := assets.MustReadFile("shell/startup.sh")
 	teardown := assets.MustReadFile("shell/teardown.sh")
-	reloadCNIpsetScript := assets.MustReadFile("shell/reload-cn-ipset.sh")
-	reapplyRoutesScript := assets.MustReadFile("shell/reapply-routes.sh")
 
 	wiring := buildSupervisorWiring(cfg.Supervisor)
 
@@ -184,14 +182,13 @@ func realRunDaemon(ctx context.Context, rundir string) error {
 	}
 
 	sup := daemon.New(daemon.SupervisorConfig{
-		Emitter:                 em,
-		SingBoxBinary:           filepath.Join(rundir, cfg.Runtime.SingBoxBinary),
-		SingBoxArgs:             []string{"run", "-D", rundir, "-C", cfg.Runtime.ConfigDir},
-		SingBoxDir:              rundir,
-		ReadyConfig:             wiring.Ready,
-		BackoffMs:               wiring.BackoffMs,
-		IptablesKeepBackoffLtMs: wiring.IptablesKeepBackoffLtMs,
-		StopGrace:               wiring.StopGrace,
+		Emitter:       em,
+		SingBoxBinary: filepath.Join(rundir, cfg.Runtime.SingBoxBinary),
+		SingBoxArgs:   []string{"run", "-D", rundir, "-C", cfg.Runtime.ConfigDir},
+		SingBoxDir:    rundir,
+		ReadyConfig:   wiring.Ready,
+		BackoffMs:     wiring.BackoffMs,
+		StopGrace:     wiring.StopGrace,
 		StartupHook: func(ctx context.Context) error {
 			em.Info("shell", "shell.startup.exec", "running startup.sh", nil)
 			if err := runner.Run(ctx, string(startup), nil); err != nil {
@@ -208,16 +205,6 @@ func realRunDaemon(ctx context.Context, rundir string) error {
 				return err
 			}
 			em.Info("shell", "shell.teardown.completed", "iptables removed", nil)
-			return nil
-		},
-		ReapplyRoutesHook: func(ctx context.Context) error {
-			em.Info("shell", "shell.reapply_routes.exec", "running reapply-routes.sh", nil)
-			if err := runner.Run(ctx, string(reapplyRoutesScript), nil); err != nil {
-				em.Warn("shell", "shell.reapply_routes.failed",
-					"reapply-routes failed: {Err}", map[string]any{"Err": err.Error()})
-				return err
-			}
-			em.Info("shell", "shell.reapply_routes.completed", "default route + fwmark rule restored", nil)
 			return nil
 		},
 		RouteHealthy:       routeHealthy,
@@ -238,16 +225,6 @@ func realRunDaemon(ctx context.Context, rundir string) error {
 			filepath.Join(rundir, cfg.Runtime.SingBoxBinary),
 			filepath.Join(rundir, cfg.Runtime.ConfigDir))
 	}
-	reloadCNIpset := func(ctx context.Context) error {
-		em.Info("shell", "shell.reload_cn_ipset.exec", "running reload-cn-ipset.sh", nil)
-		if err := runner.Run(ctx, string(reloadCNIpsetScript), nil); err != nil {
-			em.Warn("shell", "shell.reload_cn_ipset.failed",
-				"reload-cn-ipset failed: {Err}", map[string]any{"Err": err.Error()})
-			return err
-		}
-		em.Info("shell", "shell.reload_cn_ipset.completed", "cn ipset reloaded", nil)
-		return nil
-	}
 
 	// Applier 把 sync 拉到的资源真正应用到运行中的 sing-box。仅在有 updater 时构建。
 	var applier *daemon.Applier
@@ -262,13 +239,14 @@ func realRunDaemon(ctx context.Context, rundir string) error {
 			rawURL = gc.RawURL
 		}
 		applier = &daemon.Applier{
-			Rundir:        rundir,
-			ConfigDir:     cfg.Runtime.ConfigDir,
-			Emitter:       em,
-			Restart:       sup.Restart,
-			Recover:       sup.RecoverFromFailedApply,
-			CheckConfig:   checkConfig,
-			ReloadCNIpset: reloadCNIpset,
+			Rundir:    rundir,
+			ConfigDir: cfg.Runtime.ConfigDir,
+			Emitter:   em,
+			// Applier 必须装绕节流的 Restart（见 Applier.Restart 注释）——sha256 闸门
+			// 已经保证只在真有变化时进入第 4 阶段，再被外层 2s 节流挡掉就会让 commit
+			// 后的资源跟运行中的旧 sing-box 失步。
+			Restart:     sup.RestartForce,
+			CheckConfig: checkConfig,
 			PreprocessZoo: func() error {
 				if _, err := config.PreprocessZooFile(rundir, cfg.Runtime.ConfigDir); err != nil {
 					return err
@@ -295,22 +273,9 @@ func realRunDaemon(ctx context.Context, rundir string) error {
 			OnStartDelaySec: cfg.Sync.SyncOnStartDelaySec(),
 			AutoApply:       cfg.Sync.SyncAutoApply(),
 		},
-		ReapplyRules: func(ctx context.Context) error {
-			em.Info("shell", "shell.reapply_rules.exec", "running reapply-rules (teardown + startup)", nil)
-			if err := runner.Run(ctx, string(teardown), nil); err != nil {
-				em.Warn("shell", "shell.teardown.failed", "teardown best-effort failed: {Err}", map[string]any{"Err": err.Error()})
-			}
-			if err := runner.Run(ctx, string(startup), nil); err != nil {
-				em.Error("shell", "shell.reapply_rules.failed", "reapply-rules failed: {Err}", map[string]any{"Err": err.Error()})
-				return err
-			}
-			em.Info("shell", "shell.reapply_rules.completed", "iptables reinstalled", nil)
-			return nil
-		},
-		ReopenLog:     writer.Reopen,
-		CheckConfig:   checkConfig,
-		ReloadCNIpset: reloadCNIpset,
-		StatusExtra:   buildStatusExtra(rundir, cfg.Runtime.ConfigDir, cfg.Install.Firmware),
+		ReopenLog:    writer.Reopen,
+		CheckConfig:  checkConfig,
+		StatusExtra:  buildStatusExtra(rundir, cfg.Runtime.ConfigDir, cfg.Install.Firmware),
 		ScriptByName: loadScript,
 	})
 }
@@ -318,11 +283,10 @@ func realRunDaemon(ctx context.Context, rundir string) error {
 // supervisorWiring 是 [supervisor] 节 + routing 端口 ↦ daemon.SupervisorConfig
 // 的子集。抽出来便于单测覆盖默认值与 toml 覆盖。
 type supervisorWiring struct {
-	Ready                   daemon.ReadyConfig
-	BackoffMs               []int
-	IptablesKeepBackoffLtMs int
-	StopGrace               time.Duration
-	RouteWatchInterval      time.Duration
+	Ready              daemon.ReadyConfig
+	BackoffMs          []int
+	StopGrace          time.Duration
+	RouteWatchInterval time.Duration
 }
 
 // readyCheckDialMixedPort 是 ready check 默认要 dial 的本机端口。
@@ -363,10 +327,6 @@ func buildSupervisorWiring(s config.SupervisorConfig) supervisorWiring {
 	if v := s.StopGraceSeconds; v != nil && *v > 0 {
 		stopGrace = time.Duration(*v) * time.Second
 	}
-	iptablesKeepBackoff := 0
-	if v := s.IptablesKeepWhenBackoffLtMs; v != nil {
-		iptablesKeepBackoff = *v
-	}
 	routeWatchInterval := 30 * time.Second
 	if v := s.RouteWatchIntervalSec; v != nil && *v > 0 {
 		routeWatchInterval = time.Duration(*v) * time.Second
@@ -378,10 +338,9 @@ func buildSupervisorWiring(s config.SupervisorConfig) supervisorWiring {
 			TotalTimeout: totalTimeout,
 			Interval:     interval,
 		},
-		BackoffMs:               s.CrashPostReadyBackoffMs,
-		IptablesKeepBackoffLtMs: iptablesKeepBackoff,
-		StopGrace:               stopGrace,
-		RouteWatchInterval:      routeWatchInterval,
+		BackoffMs:          s.CrashPostReadyBackoffMs,
+		StopGrace:          stopGrace,
+		RouteWatchInterval: routeWatchInterval,
 	}
 }
 

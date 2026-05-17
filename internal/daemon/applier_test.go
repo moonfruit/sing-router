@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-// applierFixture 在 tmpdir 里搭出 Applier 期望的目录结构,并返回一些常用路径。
+// applierFixture 在 tmpdir 里搭出 Applier 期望的目录结构，并返回一些常用路径。
 type applierFixture struct {
 	rundir    string
 	configDir string // 相对 rundir
@@ -17,6 +17,7 @@ type applierFixture struct {
 	rulePath  string
 	binPath   string
 	stagePath string
+	cnPath    string
 }
 
 func newApplierFixture(t *testing.T) applierFixture {
@@ -30,6 +31,7 @@ func newApplierFixture(t *testing.T) applierFixture {
 		rulePath:  filepath.Join(rundir, configDir, "rule-set.json"),
 		binPath:   filepath.Join(rundir, "bin", "sing-box"),
 		stagePath: filepath.Join(rundir, "bin", "sing-box.new"),
+		cnPath:    filepath.Join(rundir, "var", "cn.txt"),
 	}
 	if err := os.MkdirAll(filepath.Join(rundir, configDir), 0o755); err != nil {
 		t.Fatal(err)
@@ -43,7 +45,6 @@ func newApplierFixture(t *testing.T) applierFixture {
 	return cfg
 }
 
-// writeFile 是 t.TempDir() 下的简便写入。
 func writeFile(t *testing.T, p, content string) {
 	t.Helper()
 	if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
@@ -51,38 +52,30 @@ func writeFile(t *testing.T, p, content string) {
 	}
 }
 
-// TestApplier_HappyPath: zoo + bin 都真变化 → Preprocess 写新 zoo/rule-set,
-// CheckConfig 通过 → Restart 调用一次 → backup 被清理 → apply-state 更新。
-func TestApplier_HappyPath(t *testing.T) {
+// TestApply_HappyPath_BinZoo: bin + zoo 都真变化 → CheckConfig 通过 → Restart 调一次。
+func TestApply_HappyPath_BinZoo(t *testing.T) {
 	fx := newApplierFixture(t)
-	// 旧 zoo / rule-set / bin
 	writeFile(t, fx.zooPath, "OLD_ZOO")
 	writeFile(t, fx.rulePath, "OLD_RULES")
 	writeFile(t, fx.binPath, "OLD_BIN")
-	// staging:新 bin
 	writeFile(t, fx.stagePath, "NEW_BIN")
 
-	var restartCalls, recoverCalls, checkCalls int
+	var restartCalls, checkCalls int
 	a := &Applier{
-		Rundir:    fx.rundir,
-		ConfigDir: fx.configDir,
-		Emitter:   newTestEmitter(t),
-		Restart: func(ctx context.Context) error {
-			restartCalls++
-			return nil
-		},
-		Recover:     func(ctx context.Context) error { recoverCalls++; return nil },
+		Rundir:      fx.rundir,
+		ConfigDir:   fx.configDir,
+		Emitter:     newTestEmitter(t),
+		Restart:     func(ctx context.Context) error { restartCalls++; return nil },
 		CheckConfig: func(ctx context.Context) error { checkCalls++; return nil },
 		PreprocessZoo: func() error {
-			// 模拟新的 zoo / rule-set 内容
 			writeFile(t, fx.zooPath, "NEW_ZOO")
 			writeFile(t, fx.rulePath, "NEW_RULES")
 			return nil
 		},
 	}
 
-	if err := a.ApplySingBoxOrZoo(context.Background(), true, fx.stagePath); err != nil {
-		t.Fatalf("ApplySingBoxOrZoo: %v", err)
+	if err := a.ApplyAll(context.Background()); err != nil {
+		t.Fatalf("ApplyAll: %v", err)
 	}
 	if restartCalls != 1 {
 		t.Errorf("restart calls = %d, want 1", restartCalls)
@@ -90,35 +83,28 @@ func TestApplier_HappyPath(t *testing.T) {
 	if checkCalls != 1 {
 		t.Errorf("check calls = %d, want 1", checkCalls)
 	}
-	if recoverCalls != 0 {
-		t.Errorf("recover calls = %d, want 0", recoverCalls)
-	}
-	// staging 已被 rename → bin 当前是 NEW_BIN
 	if data, _ := os.ReadFile(fx.binPath); string(data) != "NEW_BIN" {
 		t.Errorf("bin contents = %q, want NEW_BIN", string(data))
 	}
 	if _, err := os.Stat(fx.stagePath); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("staging not removed")
 	}
-	// backup 已清理
 	backupBin := filepath.Join(fx.rundir, "var", "apply-backup", "sing-box")
 	if _, err := os.Stat(backupBin); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("backup bin should be cleaned")
 	}
-	// apply-state 已写
 	state := readState(t, fx.rundir)
 	if state.SingBox == "" || state.ZooJSON == "" || state.RuleSetJSON == "" {
 		t.Errorf("apply-state hashes empty: %+v", state)
 	}
 }
 
-// TestApplier_NoOpGate_ZooByteIdentical: zoo.raw.json 真变,但白名单过滤后
-// 产物 zoo.json 与 rule-set.json 字节相同 → 不触发 Restart,backup 全清。
-func TestApplier_NoOpGate_ZooByteIdentical(t *testing.T) {
+// TestApply_NoOpGate_ZooByteIdentical: PreprocessZoo 写出与旧版完全相同的内容 →
+// sha256 闸门挡住，不触发 Restart。
+func TestApply_NoOpGate_ZooByteIdentical(t *testing.T) {
 	fx := newApplierFixture(t)
 	writeFile(t, fx.zooPath, "SAME_ZOO")
 	writeFile(t, fx.rulePath, "SAME_RULES")
-	// 无 bin 变化
 
 	var restartCalls int
 	a := &Applier{
@@ -126,33 +112,28 @@ func TestApplier_NoOpGate_ZooByteIdentical(t *testing.T) {
 		ConfigDir: fx.configDir,
 		Emitter:   newTestEmitter(t),
 		Restart:   func(ctx context.Context) error { restartCalls++; return nil },
-		Recover:   func(ctx context.Context) error { return nil },
 		CheckConfig: func(ctx context.Context) error {
 			t.Fatal("CheckConfig should not be called when nothing actually changes")
 			return nil
 		},
 		PreprocessZoo: func() error {
-			// 写入完全相同的字节
 			writeFile(t, fx.zooPath, "SAME_ZOO")
 			writeFile(t, fx.rulePath, "SAME_RULES")
 			return nil
 		},
 	}
 
-	if err := a.ApplySingBoxOrZoo(context.Background(), true, ""); err != nil {
-		t.Fatalf("ApplySingBoxOrZoo: %v", err)
+	if err := a.Apply(context.Background(), []Resource{ResourceZoo}); err != nil {
+		t.Fatalf("Apply: %v", err)
 	}
 	if restartCalls != 0 {
-		t.Errorf("restart should NOT be called for byte-identical output, got %d calls", restartCalls)
+		t.Errorf("restart should NOT be called for byte-identical output, got %d", restartCalls)
 	}
 }
 
-// TestApplier_NoOpGate_BinByteIdentical: staging 二进制虽然存在但与现行
-// bin 内容相同 → 仍旧不触发 Restart。
-//
-// 实际场景下 sync.go 在解压时就会 sha256-gate 掉这种情况(不返回 staging),
-// 但 Applier 层也应有兜底,验证两层闸门都到位。
-func TestApplier_NoOpGate_BinByteIdentical(t *testing.T) {
+// TestApply_NoOpGate_BinByteIdentical: staging 二进制与现行 bin 内容相同 →
+// 不触发 Restart。
+func TestApply_NoOpGate_BinByteIdentical(t *testing.T) {
 	fx := newApplierFixture(t)
 	writeFile(t, fx.binPath, "SAME_BIN")
 	writeFile(t, fx.stagePath, "SAME_BIN")
@@ -163,28 +144,25 @@ func TestApplier_NoOpGate_BinByteIdentical(t *testing.T) {
 		ConfigDir: fx.configDir,
 		Emitter:   newTestEmitter(t),
 		Restart:   func(ctx context.Context) error { restartCalls++; return nil },
-		Recover:   func(ctx context.Context) error { return nil },
 		CheckConfig: func(ctx context.Context) error {
 			t.Fatal("CheckConfig should not be called when bin is identical")
 			return nil
 		},
 	}
 
-	if err := a.ApplySingBoxOrZoo(context.Background(), false, fx.stagePath); err != nil {
-		t.Fatalf("ApplySingBoxOrZoo: %v", err)
+	if err := a.Apply(context.Background(), []Resource{ResourceSingBox}); err != nil {
+		t.Fatalf("Apply: %v", err)
 	}
 	if restartCalls != 0 {
-		t.Errorf("restart should NOT be called for byte-identical bin, got %d calls", restartCalls)
+		t.Errorf("restart should NOT be called for byte-identical bin, got %d", restartCalls)
 	}
-	// bin 仍是 SAME_BIN
 	if data, _ := os.ReadFile(fx.binPath); string(data) != "SAME_BIN" {
 		t.Errorf("bin contents = %q, want SAME_BIN", string(data))
 	}
 }
 
-// TestApplier_CheckFailReverts: CheckConfig 失败 → 旧 zoo/rule-set/bin 完整 revert,
-// Restart 不被调用。
-func TestApplier_CheckFailReverts(t *testing.T) {
+// TestApply_CheckFailReverts: CheckConfig 失败 → 全部 revert，Restart 不被调用。
+func TestApply_CheckFailReverts(t *testing.T) {
 	fx := newApplierFixture(t)
 	writeFile(t, fx.zooPath, "OLD_ZOO")
 	writeFile(t, fx.rulePath, "OLD_RULES")
@@ -193,14 +171,11 @@ func TestApplier_CheckFailReverts(t *testing.T) {
 
 	var restartCalls int
 	a := &Applier{
-		Rundir:    fx.rundir,
-		ConfigDir: fx.configDir,
-		Emitter:   newTestEmitter(t),
-		Restart:   func(ctx context.Context) error { restartCalls++; return nil },
-		Recover:   func(ctx context.Context) error { return nil },
-		CheckConfig: func(ctx context.Context) error {
-			return errors.New("synthetic check failure")
-		},
+		Rundir:      fx.rundir,
+		ConfigDir:   fx.configDir,
+		Emitter:     newTestEmitter(t),
+		Restart:     func(ctx context.Context) error { restartCalls++; return nil },
+		CheckConfig: func(ctx context.Context) error { return errors.New("synthetic check failure") },
 		PreprocessZoo: func() error {
 			writeFile(t, fx.zooPath, "NEW_ZOO")
 			writeFile(t, fx.rulePath, "NEW_RULES")
@@ -208,8 +183,8 @@ func TestApplier_CheckFailReverts(t *testing.T) {
 		},
 	}
 
-	if err := a.ApplySingBoxOrZoo(context.Background(), true, fx.stagePath); err != nil {
-		t.Fatalf("ApplySingBoxOrZoo unexpected err: %v", err)
+	if err := a.ApplyAll(context.Background()); err != nil {
+		t.Fatalf("ApplyAll unexpected err: %v", err)
 	}
 	if restartCalls != 0 {
 		t.Errorf("restart should NOT be called when CheckConfig fails")
@@ -225,21 +200,27 @@ func TestApplier_CheckFailReverts(t *testing.T) {
 	}
 }
 
-// TestApplier_RestartFailRecovers: CheckConfig 通过,Restart 失败 → revert + Recover 被调。
-func TestApplier_RestartFailRecovers(t *testing.T) {
+// TestApply_RestartFailRevertsAndRecoverRestarts: CheckConfig 通过，第一次 Restart 失败 →
+// revert → 再调一次 Restart（用旧配置拉回）。两次 Restart 都走绕节流的回调（必生效）。
+func TestApply_RestartFailRevertsAndRecoverRestarts(t *testing.T) {
 	fx := newApplierFixture(t)
 	writeFile(t, fx.zooPath, "OLD_ZOO")
 	writeFile(t, fx.rulePath, "OLD_RULES")
 	writeFile(t, fx.binPath, "OLD_BIN")
 	writeFile(t, fx.stagePath, "NEW_BIN")
 
-	var recoverCalls int
+	var restartCalls int
 	a := &Applier{
 		Rundir:    fx.rundir,
 		ConfigDir: fx.configDir,
 		Emitter:   newTestEmitter(t),
-		Restart:   func(ctx context.Context) error { return errors.New("restart fail") },
-		Recover:   func(ctx context.Context) error { recoverCalls++; return nil },
+		Restart: func(ctx context.Context) error {
+			restartCalls++
+			if restartCalls == 1 {
+				return errors.New("restart fail")
+			}
+			return nil // recover-restart 成功
+		},
 		CheckConfig: func(ctx context.Context) error { return nil },
 		PreprocessZoo: func() error {
 			writeFile(t, fx.zooPath, "NEW_ZOO")
@@ -248,14 +229,13 @@ func TestApplier_RestartFailRecovers(t *testing.T) {
 		},
 	}
 
-	err := a.ApplySingBoxOrZoo(context.Background(), true, fx.stagePath)
+	err := a.ApplyAll(context.Background())
 	if err == nil {
-		t.Fatal("expected restart error to surface")
+		t.Fatal("expected first restart error to surface")
 	}
-	if recoverCalls != 1 {
-		t.Errorf("Recover should be called once, got %d", recoverCalls)
+	if restartCalls != 2 {
+		t.Errorf("Restart should be called twice (failed + recover), got %d", restartCalls)
 	}
-	// 内容已 revert 到旧版
 	if data, _ := os.ReadFile(fx.zooPath); string(data) != "OLD_ZOO" {
 		t.Errorf("zoo not reverted: %q", string(data))
 	}
@@ -264,44 +244,104 @@ func TestApplier_RestartFailRecovers(t *testing.T) {
 	}
 }
 
-// TestApplier_CNListGate: cn.txt sha256 与 apply-state.cn_txt 一致 → 不触发 ReloadCNIpset。
-func TestApplier_CNListGate(t *testing.T) {
+// TestApply_CNTriggersRestart: cn.txt sha256 与 apply-state.cn_txt 不同 →
+// 触发一次 Restart（不再有独立 ReloadCNIpset 轻量路径）；再次调用 hash 未变 → no-op。
+func TestApply_CNTriggersRestart(t *testing.T) {
 	fx := newApplierFixture(t)
-	cnPath := filepath.Join(fx.rundir, "var", "cn.txt")
-	writeFile(t, cnPath, "1.0.0.0/8\n")
+	writeFile(t, fx.cnPath, "1.0.0.0/8\n")
 
-	var calls int
+	var restartCalls int
 	a := &Applier{
 		Rundir:    fx.rundir,
 		ConfigDir: fx.configDir,
 		Emitter:   newTestEmitter(t),
-		ReloadCNIpset: func(ctx context.Context) error {
-			calls++
+		Restart:   func(ctx context.Context) error { restartCalls++; return nil },
+	}
+
+	if err := a.Apply(context.Background(), []Resource{ResourceCN}); err != nil {
+		t.Fatalf("Apply cn first: %v", err)
+	}
+	if restartCalls != 1 {
+		t.Fatalf("first cn change: restart should be triggered once, got %d", restartCalls)
+	}
+	if err := a.Apply(context.Background(), []Resource{ResourceCN}); err != nil {
+		t.Fatalf("Apply cn second: %v", err)
+	}
+	if restartCalls != 1 {
+		t.Fatalf("second call: cn unchanged → no restart, got %d total", restartCalls)
+	}
+	writeFile(t, fx.cnPath, "2.0.0.0/8\n")
+	if err := a.Apply(context.Background(), []Resource{ResourceCN}); err != nil {
+		t.Fatalf("Apply cn third: %v", err)
+	}
+	if restartCalls != 2 {
+		t.Fatalf("third call: cn changed → restart again, got %d total", restartCalls)
+	}
+}
+
+// TestApply_ThreeResourcesSingleRestart: sing-box + zoo + cn.txt 同时变化时
+// Apply 应只调一次 Restart（核心需求：避免被 throttle 丢动作）。
+func TestApply_ThreeResourcesSingleRestart(t *testing.T) {
+	fx := newApplierFixture(t)
+	writeFile(t, fx.zooPath, "OLD_ZOO")
+	writeFile(t, fx.rulePath, "OLD_RULES")
+	writeFile(t, fx.binPath, "OLD_BIN")
+	writeFile(t, fx.stagePath, "NEW_BIN")
+	writeFile(t, fx.cnPath, "1.0.0.0/8\n")
+
+	var restartCalls int
+	a := &Applier{
+		Rundir:      fx.rundir,
+		ConfigDir:   fx.configDir,
+		Emitter:     newTestEmitter(t),
+		Restart:     func(ctx context.Context) error { restartCalls++; return nil },
+		CheckConfig: func(ctx context.Context) error { return nil },
+		PreprocessZoo: func() error {
+			writeFile(t, fx.zooPath, "NEW_ZOO")
+			writeFile(t, fx.rulePath, "NEW_RULES")
 			return nil
 		},
 	}
 
-	// 首次:state 没有 cn 哈希 → 触发 reload
-	if err := a.ApplyCNList(context.Background()); err != nil {
-		t.Fatalf("ApplyCNList first: %v", err)
+	if err := a.ApplyAll(context.Background()); err != nil {
+		t.Fatalf("ApplyAll: %v", err)
 	}
-	if calls != 1 {
-		t.Fatalf("first call: reload should be triggered once, got %d", calls)
+	if restartCalls != 1 {
+		t.Fatalf("three resources changed simultaneously → restart should be ONE, got %d", restartCalls)
 	}
-	// 二次:cn.txt 不变 → 闸门挡住
-	if err := a.ApplyCNList(context.Background()); err != nil {
-		t.Fatalf("ApplyCNList second: %v", err)
+	state := readState(t, fx.rundir)
+	if state.SingBox == "" || state.ZooJSON == "" || state.CNTxt == "" {
+		t.Errorf("apply-state should record all three hashes: %+v", state)
 	}
-	if calls != 1 {
-		t.Fatalf("second call: reload should be gated, got %d total calls", calls)
+}
+
+// TestApply_SingleResourceOnlyTouchesKind: 只传 [ResourceCN]，
+// 即使 sing-box.new 存在也不应被 commit（保留给用户后续 update sing-box --apply）。
+func TestApply_SingleResourceOnlyTouchesKind(t *testing.T) {
+	fx := newApplierFixture(t)
+	writeFile(t, fx.binPath, "OLD_BIN")
+	writeFile(t, fx.stagePath, "NEW_BIN")
+	writeFile(t, fx.cnPath, "1.0.0.0/8\n")
+
+	var restartCalls int
+	a := &Applier{
+		Rundir:  fx.rundir,
+		ConfigDir: fx.configDir,
+		Emitter: newTestEmitter(t),
+		Restart: func(ctx context.Context) error { restartCalls++; return nil },
 	}
-	// 第三次:cn.txt 真变 → 再次触发
-	writeFile(t, cnPath, "2.0.0.0/8\n")
-	if err := a.ApplyCNList(context.Background()); err != nil {
-		t.Fatalf("ApplyCNList third: %v", err)
+
+	if err := a.Apply(context.Background(), []Resource{ResourceCN}); err != nil {
+		t.Fatalf("Apply cn-only: %v", err)
 	}
-	if calls != 2 {
-		t.Fatalf("third call: reload should fire again, got %d total calls", calls)
+	if restartCalls != 1 {
+		t.Fatalf("cn change → restart once, got %d", restartCalls)
+	}
+	if data, _ := os.ReadFile(fx.binPath); string(data) != "OLD_BIN" {
+		t.Errorf("bin should NOT be touched by cn-only apply: %q", string(data))
+	}
+	if _, err := os.Stat(fx.stagePath); err != nil {
+		t.Errorf("staging should be preserved by cn-only apply: %v", err)
 	}
 }
 

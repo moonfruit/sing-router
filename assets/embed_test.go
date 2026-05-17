@@ -24,8 +24,6 @@ func TestDefaultConfigsPresent(t *testing.T) {
 		"firmware/merlin/services-start.snippet",
 		"shell/startup.sh",
 		"shell/teardown.sh",
-		"shell/reapply-routes.sh",
-		"shell/reload-cn-ipset.sh",
 	} {
 		if _, err := ReadFile(p); err != nil {
 			t.Errorf("missing %s: %v", p, err)
@@ -81,8 +79,8 @@ func TestNatStartSnippetMarkers(t *testing.T) {
 	if !strings.Contains(s, "{{.Binary}}") {
 		t.Fatal("snippet should reference {{.Binary}} so install can bake the absolute path")
 	}
-	if !strings.Contains(s, "reapply-rules") {
-		t.Fatal("snippet should call reapply-rules")
+	if !strings.Contains(s, "restart") {
+		t.Fatal("snippet should call `sing-router restart` (full Shutdown+Startup cycle)")
 	}
 	// nat-start 触发时 PATH 不含 /opt/sbin —— 不许出现 `which sing-router` 这类裸名 lookup。
 	// 注释里提历史背景不算违规，与 TestEmbeddedShellScriptsNoCommandBuiltin 同套路。
@@ -103,8 +101,8 @@ func TestKoolshareScriptShape(t *testing.T) {
 	if !strings.Contains(s, "{{.Binary}}") {
 		t.Error("script must reference {{.Binary}} so install can bake the absolute path")
 	}
-	if !strings.Contains(s, "reapply-rules") {
-		t.Error("must call reapply-rules")
+	if !strings.Contains(s, "restart") {
+		t.Error("must call `sing-router restart` (full Shutdown+Startup cycle)")
 	}
 	if !strings.Contains(s, "start_nat") {
 		t.Error("must handle start_nat action")
@@ -148,47 +146,14 @@ func TestStartupShellRequiresEnvVars(t *testing.T) {
 	}
 }
 
-func TestReapplyRoutesShellShape(t *testing.T) {
-	data, err := ReadFile("shell/reapply-routes.sh")
-	if err != nil {
-		t.Fatal(err)
-	}
-	s := string(data)
-	// 必须 hard-require 三个 env
-	for _, name := range []string{"TUN", "ROUTE_TABLE", "ROUTE_MARK"} {
-		needle := `: "${` + name + `:?`
-		if !strings.Contains(s, needle) {
-			t.Errorf("reapply-routes.sh should hard-require %s via : \"${%s:?...}\"", name, name)
-		}
-	}
-	// 必须装两条与 TUN 设备相关的规则
-	if !strings.Contains(s, `ip route replace default dev "$TUN" table "$ROUTE_TABLE"`) {
-		t.Error("reapply-routes.sh must install default route via `ip route replace default dev $TUN table $ROUTE_TABLE`")
-	}
-	if !strings.Contains(s, `ip rule add fwmark "$ROUTE_MARK" table "$ROUTE_TABLE"`) {
-		t.Error("reapply-routes.sh must add fwmark rule")
-	}
-	// 不许执行 iptables / ipset 命令（职责清晰：只管路由）。匹配命令调用形式，
-	// 注释里出现这些词不算违规。
-	for _, badCmd := range []string{"\niptables ", "\nip6tables ", "\nipset ",
-		"\tiptables ", "\tip6tables ", "\tipset "} {
-		if strings.Contains(s, badCmd) {
-			t.Errorf("reapply-routes.sh must NOT invoke %q", strings.TrimSpace(badCmd))
-		}
-	}
-}
-
 // TestEmbeddedShellScriptsBusyboxSleep 守护：嵌入 shell 脚本不得使用小数秒 sleep。
 // 路由器（Entware / firmware）的 sleep 多不支持 `sleep 0.2`，配合脚本里的 set -eu
-// 会在第一处小数 sleep 直接中止 —— reapply-routes.sh 曾因此在 sing-box 重启后
-// 无法补回 device-bound 默认路由（实机测试套件 D1 暴露）。
+// 会在第一处小数 sleep 直接中止。
 func TestEmbeddedShellScriptsBusyboxSleep(t *testing.T) {
 	fracSleep := regexp.MustCompile(`\bsleep[[:space:]]+[0-9]*\.[0-9]`)
 	for _, p := range []string{
 		"shell/startup.sh",
 		"shell/teardown.sh",
-		"shell/reapply-routes.sh",
-		"shell/reload-cn-ipset.sh",
 		"initd/S99sing-router",
 		"firmware/koolshare/N99sing-router.sh.tmpl",
 	} {
@@ -219,8 +184,6 @@ func TestEmbeddedShellScriptsNoCommandBuiltin(t *testing.T) {
 	for _, p := range []string{
 		"shell/startup.sh",
 		"shell/teardown.sh",
-		"shell/reapply-routes.sh",
-		"shell/reload-cn-ipset.sh",
 		"initd/S99sing-router",
 		"firmware/koolshare/N99sing-router.sh.tmpl",
 		"firmware/merlin/nat-start.snippet",

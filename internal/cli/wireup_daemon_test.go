@@ -86,18 +86,16 @@ func TestBuildSupervisorWiring_TomlOverrides(t *testing.T) {
 	clash := false
 	dial := false
 	stopSec := 7
-	keepBackoff := 4242
 	routeWatchSec := 15
 	backoffSeq := []int{100, 200, 400}
 	w := buildSupervisorWiring(config.SupervisorConfig{
-		ReadyCheckTimeoutMs:         &tMs,
-		ReadyCheckIntervalMs:        &iMs,
-		ReadyCheckClashAPI:          &clash,
-		ReadyCheckDialInbounds:      &dial,
-		StopGraceSeconds:            &stopSec,
-		IptablesKeepWhenBackoffLtMs: &keepBackoff,
-		RouteWatchIntervalSec:       &routeWatchSec,
-		CrashPostReadyBackoffMs:     backoffSeq,
+		ReadyCheckTimeoutMs:     &tMs,
+		ReadyCheckIntervalMs:    &iMs,
+		ReadyCheckClashAPI:      &clash,
+		ReadyCheckDialInbounds:  &dial,
+		StopGraceSeconds:        &stopSec,
+		RouteWatchIntervalSec:   &routeWatchSec,
+		CrashPostReadyBackoffMs: backoffSeq,
 	})
 
 	if w.Ready.TotalTimeout != 30*time.Second {
@@ -114,9 +112,6 @@ func TestBuildSupervisorWiring_TomlOverrides(t *testing.T) {
 	}
 	if w.StopGrace != 7*time.Second {
 		t.Fatalf("StopGrace = %v", w.StopGrace)
-	}
-	if w.IptablesKeepBackoffLtMs != 4242 {
-		t.Fatalf("IptablesKeepBackoffLtMs = %d", w.IptablesKeepBackoffLtMs)
 	}
 	if len(w.BackoffMs) != 3 || w.BackoffMs[0] != 100 || w.BackoffMs[2] != 400 {
 		t.Fatalf("BackoffMs = %v", w.BackoffMs)

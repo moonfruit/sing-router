@@ -58,15 +58,14 @@ type LogConfig struct {
 }
 
 type SupervisorConfig struct {
-	ReadyCheckDialInbounds      *bool  `toml:"ready_check_dial_inbounds"`
-	ReadyCheckClashAPI          *bool  `toml:"ready_check_clash_api"`
-	ReadyCheckTimeoutMs         *int   `toml:"ready_check_timeout_ms"`
-	ReadyCheckIntervalMs        *int   `toml:"ready_check_interval_ms"`
-	CrashPreReadyAction         string `toml:"crash_pre_ready_action"`
-	CrashPostReadyBackoffMs     []int  `toml:"crash_post_ready_backoff_ms"`
-	IptablesKeepWhenBackoffLtMs *int   `toml:"iptables_keep_when_backoff_lt_ms"`
-	StopGraceSeconds            *int   `toml:"stop_grace_seconds"`
-	RouteWatchIntervalSec       *int   `toml:"route_watch_interval_sec"`
+	ReadyCheckDialInbounds  *bool  `toml:"ready_check_dial_inbounds"`
+	ReadyCheckClashAPI      *bool  `toml:"ready_check_clash_api"`
+	ReadyCheckTimeoutMs     *int   `toml:"ready_check_timeout_ms"`
+	ReadyCheckIntervalMs    *int   `toml:"ready_check_interval_ms"`
+	CrashPreReadyAction     string `toml:"crash_pre_ready_action"`
+	CrashPostReadyBackoffMs []int  `toml:"crash_post_ready_backoff_ms"`
+	StopGraceSeconds        *int   `toml:"stop_grace_seconds"`
+	RouteWatchIntervalSec   *int   `toml:"route_watch_interval_sec"`
 }
 
 type ZooConfig struct {

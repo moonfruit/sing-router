@@ -18,9 +18,9 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 
 require_running
 # 用例只 flush sing-box 自有链、不停 daemon。若内嵌钩子没把链装回，daemon 仍
-# running → restore_to_running 是 no-op → 残留半套规则。trap 里先 reapply-rules
-# 兜底重装，保证无论从哪步退出都不留残规。
-trap 'rsh "$SINGROUTER reapply-rules" >/dev/null 2>&1 || true; restore_to_running' EXIT
+# running → restore_to_running 是 no-op → 残留半套规则。trap 里先 restart --force
+# 兜底完整重装（绕 2s 节流，避免兜底紧跟主流程的 restart 被 skip）。
+trap 'rsh "$SINGROUTER restart --force" >/dev/null 2>&1 || true; restore_to_running' EXIT
 
 rsh "$SINGROUTER script koolshare/N99 >/dev/null 2>&1" \
     || skip "$SINGROUTER script koolshare/N99 不可用 —— 无法取出内嵌钩子"
@@ -37,7 +37,7 @@ rsh "$SINGROUTER script koolshare/N99 | sh -s -- start_nat" >/dev/null 2>&1 || t
 sleep 3
 hooklog="$(rsh "tail -3 /tmp/sing-router-nat-start.log 2>/dev/null")"
 note "nat-start.log 末尾：$hooklog"
-echo "$hooklog" | grep -q "reapply-rules ok" || fail "钩子未记录 'reapply-rules ok'"
+echo "$hooklog" | grep -q "restart ok" || fail "钩子未记录 'restart ok'"
 
 st="$(probe)"
 [ "$st" = PROXY ] || fail "钩子执行后 probe=${st}（预期 PROXY）"

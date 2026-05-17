@@ -9,8 +9,8 @@
   - [ ] 自动化
 - [x] stderr.log -> sing-router.err
 - [x] router table: 111 -> 7890 -> 7892
-- [ ] 清理 daemon.toml 中不再使用的字段
-- [ ] 简化重启流程：所有触发路径（supervisor 崩溃重启 / CLI restart / reapply-rules / applier 变更触发等）统一走「拆路由 → 停 sing-box → 启 sing-box → 应用路由规则」完整循环，放弃当前「尽量少动作」的增量策略（含 `IptablesKeepBackoffLtMs` 等保留 iptables 的闸门）
+- [x] 清理 daemon.toml 中不再使用的字段（随简化重启流程，删除 `iptables_keep_when_backoff_lt_ms`）
+- [x] 简化重启流程：所有触发路径统一收敛到 `Supervisor` 的 `Shutdown` / `Startup` / `Restart`（=Shutdown+Startup）三个原子方法，2s 节流闸门；删除 `reapply-rules` / `reload-cn-ipset` CLI/HTTP 端点与对应 shell 脚本；Applier 改为 4 阶段 `Apply(ctx, kinds)`，一轮 sync 最多调 1 次 Restart
 - [ ] 路由守护线程：daemon 内起 watchdog goroutine 周期性巡检 iptables/ip rule/ip route 是否仍是预期状态，被外部（固件 nat 重启、第三方脚本等）拆掉时自动触发上面的完整重启流程
 - [ ] 调查 ShellCrash UDP 透明代理处理模式，比较 TPROXY 与 TUN 方案的优缺点（性能、兼容性、CPU 占用、对 IPv6 / fakeip / fwmark 的支持、与现有 sing-router iptables 编排的整合成本），输出选型结论并决定是否切换默认 inbound
 - [ ] 调查 ShellCrash 启用 IPv6 且内核 `ip6tables` 不支持 REDIRECT（缺 `ip6t_REDIRECT` 模块）时的兜底处理逻辑：是降级为 TPROXY / TUN、跳过 IPv6 透明代理、还是有别的策略？产出可借鉴的检测 + fallback 方案给 sing-router
@@ -22,3 +22,4 @@
 - [x] sing-router daemon crash
 - [x] ip rule del 执行多次直到失败
 - [x] No token docker test Phase E error
+- [ ] sing-router logs -F 切换文件时退出问题
