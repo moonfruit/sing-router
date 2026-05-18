@@ -27,16 +27,16 @@ type TemplateVars struct {
 // 比当前 binary mtime 旧时覆盖；用户跑了 sing-router update 之后 rundir 文件
 // 更新过 → 比 binary 还新 → 不覆盖，保留下载下来的最新版本。
 var followBinarySeeds = map[string]string{
-	"var/cn.txt":              "var/cn.txt",
-	"var/cn.txt.etag":         "var/cn.txt.etag",
-	"rules/geoip-cn.srs":      "var/rules/geoip-cn.srs",
-	"rules/geoip-cn.srs.etag": "var/rules/geoip-cn.srs.etag",
-	"rules/geosites-cn.srs":   "var/rules/geosites-cn.srs",
-	"rules/geosites-cn.srs.etag": "var/rules/geosites-cn.srs.etag",
-	"rules/lan.srs":           "var/rules/lan.srs",
-	"rules/lan.srs.etag":      "var/rules/lan.srs.etag",
-	"rules/fakeip-bypass.srs":      "var/rules/fakeip-bypass.srs",
-	"rules/fakeip-bypass.srs.etag": "var/rules/fakeip-bypass.srs.etag",
+	"var/cn.txt":                       "var/cn.txt",
+	"var/cn.txt.etag":                  "var/cn.txt.etag",
+	"var/rules/geoip-cn.srs":           "var/rules/geoip-cn.srs",
+	"var/rules/geoip-cn.srs.etag":      "var/rules/geoip-cn.srs.etag",
+	"var/rules/geosites-cn.srs":        "var/rules/geosites-cn.srs",
+	"var/rules/geosites-cn.srs.etag":   "var/rules/geosites-cn.srs.etag",
+	"var/rules/lan.srs":                "var/rules/lan.srs",
+	"var/rules/lan.srs.etag":           "var/rules/lan.srs.etag",
+	"var/rules/fakeip-bypass.srs":      "var/rules/fakeip-bypass.srs",
+	"var/rules/fakeip-bypass.srs.etag": "var/rules/fakeip-bypass.srs.etag",
 }
 
 // SeedDefaults 把内嵌资源拷到 rundir：
@@ -48,15 +48,15 @@ var followBinarySeeds = map[string]string{
 //     用户 sing-router update 后的下载内容不会被覆盖）
 func SeedDefaults(rundir string, vars TemplateVars) error {
 	plainFiles := map[string]string{
-		"config.d.default/clash.json":       "config.d/clash.json",
-		"config.d.default/dns.json":         "config.d/dns.json",
-		"config.d.default/inbounds.json":    "config.d/inbounds.json",
-		"config.d.default/log.json":         "config.d/log.json",
-		"config.d.default/cache.json":       "config.d/cache.json",
-		"config.d.default/certificate.json": "config.d/certificate.json",
-		"config.d.default/http.json":        "config.d/http.json",
-		"config.d.default/outbounds.json":   "config.d/outbounds.json",
-		"config.d.default/zoo.json":         "config.d/zoo.json",
+		"config.d/clash.json":       "config.d/clash.json",
+		"config.d/dns.json":         "config.d/dns.json",
+		"config.d/inbounds.json":    "config.d/inbounds.json",
+		"config.d/log.json":         "config.d/log.json",
+		"config.d/cache.json":       "config.d/cache.json",
+		"config.d/certificate.json": "config.d/certificate.json",
+		"config.d/http.json":        "config.d/http.json",
+		"config.d/outbounds.json":   "config.d/outbounds.json",
+		"config.d/zoo.json":         "config.d/zoo.json",
 	}
 	for src, dst := range plainFiles {
 		if err := writeDefaultAndSeed(rundir, dst, func() ([]byte, error) {

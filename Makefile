@@ -45,7 +45,7 @@ update-rule-sets:
 	    if [ -z "$$token" ]; then echo "ERROR: SING_ROUTER_GITEE_TOKEN not in secrets/sing-router.env" >&2; exit 1; fi && \
 	    for f in $(RULE_SETS); do \
 	        url="https://gitee.com/api/v5/repos/$(GITEE_OWNER)/$(GITEE_REPO)/raw/rules/$$f?ref=$(GITEE_REF)&access_token=$$token"; \
-	        scripts/fetch-asset.sh "$$url" "assets/rules/$$f"; \
+	        scripts/fetch-asset.sh "$$url" "assets/var/rules/$$f"; \
 	    done
 
 update-all: update-cn update-rule-sets

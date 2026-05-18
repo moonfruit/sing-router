@@ -291,7 +291,7 @@ type supervisorWiring struct {
 
 // readyCheckDialMixedPort 是 ready check 默认要 dial 的本机端口。
 //
-// 必须与 assets/config.d.default/inbounds.json 中 mixed-in 的 listen_port 保持一致；
+// 必须与 assets/config.d/inbounds.json 中 mixed-in 的 listen_port 保持一致；
 // 改 inbounds.json 时同步改这里（或反过来）。
 //
 // 为什么不 dial dns-in (1053) / redirect-in (7892)：那两个 inbound 是 transparent

@@ -8,15 +8,15 @@ import (
 
 func TestDefaultConfigsPresent(t *testing.T) {
 	for _, p := range []string{
-		"config.d.default/clash.json",
-		"config.d.default/dns.json",
-		"config.d.default/inbounds.json",
-		"config.d.default/log.json",
-		"config.d.default/cache.json",
-		"config.d.default/certificate.json",
-		"config.d.default/http.json",
-		"config.d.default/outbounds.json",
-		"config.d.default/zoo.json",
+		"config.d/clash.json",
+		"config.d/dns.json",
+		"config.d/inbounds.json",
+		"config.d/log.json",
+		"config.d/cache.json",
+		"config.d/certificate.json",
+		"config.d/http.json",
+		"config.d/outbounds.json",
+		"config.d/zoo.json",
 		"daemon.toml.tmpl",
 		"initd/S99sing-router",
 		"firmware/koolshare/N99sing-router.sh.tmpl",
@@ -55,7 +55,7 @@ func TestDaemonTomlTemplateHasSeqSection(t *testing.T) {
 }
 
 func TestDNSFakeIPRangeFixed(t *testing.T) {
-	data, err := ReadFile("config.d.default/dns.json")
+	data, err := ReadFile("config.d/dns.json")
 	if err != nil {
 		t.Fatal(err)
 	}
