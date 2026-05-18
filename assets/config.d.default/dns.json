@@ -55,7 +55,11 @@
       // 127.0.0.1:listen_port，会一路掉到下面 ip_is_private→DIRECT，DIRECT 再去
       // dial 同一个端口被自己接住，无限自繁殖。真正的 DNS 协议字节已被上面
       // hijack-dns 接走；NAT REDIRECT 进来的合法流量 dst 是公网 IP，不命中此条。
-      { "ip_cidr": ["127.0.0.0/8", "::1/128"], "port": [1053, 7892], "action": "reject" },
+      {
+        "source_ip_cidr": ["127.0.0.0/8", "::1/128", "192.168.50.1/32"],
+        "inbound": ["dns-in", "redirect-in", "tproxy-in", "tun-in"],
+        "action": "reject"
+      },
       { "ip_is_private": true, "outbound": "DIRECT" },
       { "action": "sniff-override-destination" }
     ],
