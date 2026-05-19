@@ -154,6 +154,7 @@ type RouterConfig struct {
 	Tun          *string `toml:"tun"`
 	FakeIP       *string `toml:"fakeip"`
 	LAN          *string `toml:"lan"`
+	LanIface     *string `toml:"lan_iface"`
 	RouteTable   *int    `toml:"route_table"`
 	ProxyPorts   *string `toml:"proxy_ports"`
 }

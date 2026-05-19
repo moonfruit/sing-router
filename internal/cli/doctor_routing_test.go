@@ -365,56 +365,189 @@ func TestCheckIptablesChains_SubchainMissingFails(t *testing.T) {
 	}
 }
 
-// ----------------------- checkIp6tablesDNS -----------------------
+// ----------------------- checkRejectFallbacks -----------------------
 
-func TestCheckIp6tablesDNS_Pass(t *testing.T) {
-	const ok = `-P INPUT ACCEPT
--A INPUT -p tcp -m tcp --dport 53 -j REJECT --reject-with icmp6-port-unreachable
--A INPUT -p udp -m udp --dport 53 -j REJECT --reject-with icmp6-port-unreachable
+// 完整 fixture：v6 × INPUT × 53（INPUT 不需 -i） + v6 × FORWARD × 53
+// + v4&v6 × FORWARD × 853，FORWARD 链统一带 -i br0 收窄到 LAN 入向。
+// 对应 startup.sh 2.4 / 2.5 节实际安装的规则集合。
+// startup.sh 2.4/2.5 节实际写入的 spec：TCP 显式 --reject-with tcp-reset
+// (偏离默认)；UDP 走默认 REJECT (默认即 icmp[6]-port-unreachable，无需
+// 显式)。doctor 本身不解析 --reject-with，fixture 这样写只为如实反映
+// 脚本意图。
+const fixtureIp6INPUT53 = `-P INPUT ACCEPT
+-A INPUT -p tcp -m tcp --dport 53 -j REJECT --reject-with tcp-reset
+-A INPUT -p udp -m udp --dport 53 -j REJECT
 `
-	stubRunReadOnly(t, map[string]cmdResult{
-		"ip6tables -t filter -S INPUT": {out: ok, code: 0},
-	})
-	checks := checkIp6tablesDNS()
-	if countStatus(checks, "fail") > 0 || countStatus(checks, "warn") > 0 {
-		t.Fatalf("unexpected non-pass: %+v", checks)
+
+const fixtureIp6FORWARDAll = `-P FORWARD ACCEPT
+-A FORWARD -i br0 -p tcp -m tcp --dport 53 -j REJECT --reject-with tcp-reset
+-A FORWARD -i br0 -p udp -m udp --dport 53 -j REJECT
+-A FORWARD -i br0 -p tcp -m tcp --dport 853 -j REJECT --reject-with tcp-reset
+-A FORWARD -i br0 -p udp -m udp --dport 853 -j REJECT
+`
+
+const fixtureIp4FORWARD853 = `-P FORWARD ACCEPT
+-A FORWARD -i br0 -p tcp -m tcp --dport 853 -j REJECT --reject-with tcp-reset
+-A FORWARD -i br0 -p udp -m udp --dport 853 -j REJECT
+`
+
+func rejectCmds(extra map[string]cmdResult) map[string]cmdResult {
+	base := map[string]cmdResult{
+		"ip6tables -t filter -S INPUT":   {out: fixtureIp6INPUT53, code: 0},
+		"ip6tables -t filter -S FORWARD": {out: fixtureIp6FORWARDAll, code: 0},
+		"iptables -t filter -S FORWARD":  {out: fixtureIp4FORWARD853, code: 0},
+	}
+	maps.Copy(base, extra)
+	return base
+}
+
+func TestCheckRejectFallbacks_Pass(t *testing.T) {
+	stubRunReadOnly(t, rejectCmds(nil))
+	checks := checkRejectFallbacks(config.DefaultRouting())
+	if n := countStatus(checks, "fail"); n > 0 {
+		t.Fatalf("unexpected %d fails: %+v", n, checks)
+	}
+	if n := countStatus(checks, "warn"); n > 0 {
+		t.Fatalf("unexpected %d warns: %+v", n, checks)
+	}
+	// 4 个 (family,chain,port) × 2 proto = 8 个 pass 行
+	if n := countStatus(checks, "pass"); n != 8 {
+		t.Fatalf("expected 8 pass rows, got %d: %+v", n, checks)
 	}
 }
 
-func TestCheckIp6tablesDNS_AcceptBeforeRejectWarns(t *testing.T) {
+func TestCheckRejectFallbacks_AcceptBeforeRejectWarns(t *testing.T) {
 	const interfered = `-P INPUT ACCEPT
 -A INPUT -p udp -m udp --dport 53 -j ACCEPT
 -A INPUT -p tcp -m tcp --dport 53 -j REJECT
 -A INPUT -p udp -m udp --dport 53 -j REJECT
 `
-	stubRunReadOnly(t, map[string]cmdResult{
+	stubRunReadOnly(t, rejectCmds(map[string]cmdResult{
 		"ip6tables -t filter -S INPUT": {out: interfered, code: 0},
-	})
-	checks := checkIp6tablesDNS()
+	}))
+	checks := checkRejectFallbacks(config.DefaultRouting())
 	if findCheck(checks, "ip6tables INPUT line 1") == nil {
-		t.Fatalf("expected warn at line 1, got %+v", checks)
+		t.Fatalf("expected warn at ip6tables INPUT line 1, got %+v", checks)
 	}
 }
 
-func TestCheckIp6tablesDNS_MissingFails(t *testing.T) {
-	const partial = `-P INPUT ACCEPT
--A INPUT -p tcp -m tcp --dport 53 -j REJECT
+func TestCheckRejectFallbacks_V6Port53ForwardMissingFails(t *testing.T) {
+	// 部分规则：v6/FORWARD 53 只装了 tcp 一条，且缺 `-i br0` 收窄 → 应当判 fail
+	// （IIf 不匹配等同于规则缺失，提示用户重新跑 startup.sh）
+	const partial = `-P FORWARD ACCEPT
+-A FORWARD -p tcp -m tcp --dport 53 -j REJECT
+-A FORWARD -i br0 -p tcp -m tcp --dport 853 -j REJECT
+-A FORWARD -i br0 -p udp -m udp --dport 853 -j REJECT
+`
+	stubRunReadOnly(t, rejectCmds(map[string]cmdResult{
+		"ip6tables -t filter -S FORWARD": {out: partial, code: 0},
+	}))
+	checks := checkRejectFallbacks(config.DefaultRouting())
+	tcp := findCheck(checks, "ip6tables FORWARD -i br0 REJECT 53/tcp")
+	udp := findCheck(checks, "ip6tables FORWARD -i br0 REJECT 53/udp")
+	if tcp == nil || tcp.Status != "fail" {
+		t.Fatalf("expected fail for missing -i br0 on v6 FORWARD tcp 53, got %+v", checks)
+	}
+	if udp == nil || udp.Status != "fail" {
+		t.Fatalf("expected fail for missing v6 FORWARD udp 53, got %+v", checks)
+	}
+}
+
+func TestCheckRejectFallbacks_V4Port853ForwardMissingFails(t *testing.T) {
+	const noIp4DoT = `-P FORWARD ACCEPT
+`
+	stubRunReadOnly(t, rejectCmds(map[string]cmdResult{
+		"iptables -t filter -S FORWARD": {out: noIp4DoT, code: 0},
+	}))
+	checks := checkRejectFallbacks(config.DefaultRouting())
+	tcp := findCheck(checks, "iptables FORWARD -i br0 REJECT 853/tcp")
+	udp := findCheck(checks, "iptables FORWARD -i br0 REJECT 853/udp")
+	if tcp == nil || tcp.Status != "fail" || udp == nil || udp.Status != "fail" {
+		t.Fatalf("expected fails for both v4 FORWARD 853, got %+v", checks)
+	}
+}
+
+// 前置规则限定了不同接口（如 -i wg0），不会命中 LAN 入向流量，因此
+// 不应被报为干扰；而同接口或 catch-all 的前置 ACCEPT 仍应报警。
+func TestCheckRejectFallbacks_OtherIfaceAcceptNotInterferer(t *testing.T) {
+	const ip4FwdMixed = `-P FORWARD ACCEPT
+-A FORWARD -i wg0 -p tcp -m tcp --dport 853 -j ACCEPT
+-A FORWARD -i br0 -p tcp -m tcp --dport 853 -j REJECT
+-A FORWARD -i br0 -p udp -m udp --dport 853 -j REJECT
+`
+	stubRunReadOnly(t, rejectCmds(map[string]cmdResult{
+		"iptables -t filter -S FORWARD": {out: ip4FwdMixed, code: 0},
+	}))
+	checks := checkRejectFallbacks(config.DefaultRouting())
+	for _, c := range checks {
+		if strings.HasPrefix(c.Name, "iptables FORWARD line 1") {
+			t.Fatalf("wg0 ACCEPT should not be flagged as interferer for br0 rule: %+v", c)
+		}
+	}
+}
+
+func TestCheckRejectFallbacks_SameIfaceAcceptIsInterferer(t *testing.T) {
+	const ip4FwdSameIface = `-P FORWARD ACCEPT
+-A FORWARD -i br0 -p tcp -m tcp --dport 853 -j ACCEPT
+-A FORWARD -i br0 -p tcp -m tcp --dport 853 -j REJECT
+-A FORWARD -i br0 -p udp -m udp --dport 853 -j REJECT
+`
+	stubRunReadOnly(t, rejectCmds(map[string]cmdResult{
+		"iptables -t filter -S FORWARD": {out: ip4FwdSameIface, code: 0},
+	}))
+	checks := checkRejectFallbacks(config.DefaultRouting())
+	if findCheck(checks, "iptables FORWARD line 1") == nil {
+		t.Fatalf("same-iface ACCEPT before REJECT should warn, got %+v", checks)
+	}
+}
+
+// 自定义 lan_iface=br1 时，doctor 应当按新接口匹配。
+func TestCheckRejectFallbacks_CustomLanIface(t *testing.T) {
+	const ip6FORWARDBr1 = `-P FORWARD ACCEPT
+-A FORWARD -i br1 -p tcp -m tcp --dport 53 -j REJECT
+-A FORWARD -i br1 -p udp -m udp --dport 53 -j REJECT
+-A FORWARD -i br1 -p tcp -m tcp --dport 853 -j REJECT
+-A FORWARD -i br1 -p udp -m udp --dport 853 -j REJECT
+`
+	const ip4FORWARDBr1 = `-P FORWARD ACCEPT
+-A FORWARD -i br1 -p tcp -m tcp --dport 853 -j REJECT
+-A FORWARD -i br1 -p udp -m udp --dport 853 -j REJECT
 `
 	stubRunReadOnly(t, map[string]cmdResult{
-		"ip6tables -t filter -S INPUT": {out: partial, code: 0},
+		"ip6tables -t filter -S INPUT":   {out: fixtureIp6INPUT53, code: 0},
+		"ip6tables -t filter -S FORWARD": {out: ip6FORWARDBr1, code: 0},
+		"iptables -t filter -S FORWARD":  {out: ip4FORWARDBr1, code: 0},
 	})
-	checks := checkIp6tablesDNS()
-	if countStatus(checks, "fail") == 0 {
-		t.Fatalf("expected fail for missing udp REJECT, got %+v", checks)
+	r := config.DefaultRouting()
+	r.LanIface = "br1"
+	checks := checkRejectFallbacks(r)
+	if n := countStatus(checks, "fail"); n > 0 {
+		t.Fatalf("unexpected fails with lan_iface=br1: %+v", checks)
+	}
+	if findCheck(checks, "ip6tables FORWARD -i br1 REJECT 53/tcp") == nil {
+		t.Fatalf("expected label to use br1, got %+v", checks)
 	}
 }
 
-func TestCheckIp6tablesDNS_Unavailable(t *testing.T) {
+func TestCheckRejectFallbacks_Ip6Unavailable(t *testing.T) {
 	stubRunReadOnly(t, map[string]cmdResult{
-		"ip6tables -t filter -S INPUT": {out: "", code: -1, err: fmt.Errorf("exec: not found")},
+		"ip6tables -t filter -S INPUT":   {out: "", code: -1, err: fmt.Errorf("exec: not found")},
+		"ip6tables -t filter -S FORWARD": {out: "", code: -1, err: fmt.Errorf("exec: not found")},
+		"iptables -t filter -S FORWARD":  {out: fixtureIp4FORWARD853, code: 0},
 	})
-	checks := checkIp6tablesDNS()
-	if checks[0].Status != "warn" {
-		t.Fatalf("expected warn when ip6tables unavailable, got %+v", checks)
+	checks := checkRejectFallbacks(config.DefaultRouting())
+	// ip6tables 不可用应只产生一条 family-level warn（去重）
+	warns := 0
+	for _, c := range checks {
+		if c.Name == "ip6tables" && c.Status == "warn" {
+			warns++
+		}
+	}
+	if warns != 1 {
+		t.Fatalf("expected exactly 1 family-level ip6tables warn, got %d: %+v", warns, checks)
+	}
+	// v4 部分仍应该通过
+	if n := countStatus(checks, "fail"); n > 0 {
+		t.Fatalf("unexpected fails: %+v", checks)
 	}
 }

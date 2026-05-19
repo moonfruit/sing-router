@@ -67,6 +67,7 @@ type iptRule struct {
 	Proto  string // "tcp" / "udp" / "all"
 	DPort  string // "53" 或 "22,80,443" 或 ""
 	DAddr  string // "28.0.0.0/8" 或 ""
+	IIf    string // "-i br0" 入接口
 	OIf    string // "-o utun" 出接口
 	Target string // "ACCEPT" / "RETURN" / "REJECT" / "sing-box" 等
 	Spec   string // 原始 -A 行
@@ -76,6 +77,7 @@ type interfererTarget struct {
 	Proto string
 	DPort string
 	DAddr string
+	IIf   string // 入接口；空 = catch-all（任何接口都可能命中）
 }
 
 // ----------------------- 解析器 -----------------------
@@ -197,6 +199,11 @@ func parseIptablesS(out string) []iptRule {
 					r.DPort = toks[i+1]
 					i++
 				}
+			case "-i":
+				if i+1 < len(toks) {
+					r.IIf = toks[i+1]
+					i++
+				}
 			case "-o":
 				if i+1 < len(toks) {
 					r.OIf = toks[i+1]
@@ -305,6 +312,16 @@ func protoMatch(a, b string) bool {
 	return a == b
 }
 
+// iifOverlap 判断两个 `-i <iface>` 限定的流量集合是否相交。
+// 任一侧为空 → catch-all，与任何接口相交；非空且不相等 → 互斥（例如
+// `-i wg0` 与 `-i br0` 完全不交集，不构成相互干扰）。
+func iifOverlap(a, b string) bool {
+	if a == "" || b == "" {
+		return true
+	}
+	return a == b
+}
+
 // findInterferers 返回 prior 中可能拦截 ours 流量的规则。
 func findInterferers(prior []iptRule, ours interfererTarget) []iptRule {
 	blocking := map[string]bool{
@@ -323,6 +340,9 @@ func findInterferers(prior []iptRule, ours interfererTarget) []iptRule {
 			continue
 		}
 		if !cidrOverlap(r.DAddr, ours.DAddr) {
+			continue
+		}
+		if !iifOverlap(r.IIf, ours.IIf) {
 			continue
 		}
 		hits = append(hits, r)
@@ -346,7 +366,7 @@ func checkRouting(r config.Routing) []doctorCheck {
 	out = append(out, checkIPRule(r)...)
 	out = append(out, checkIPRoute(r)...)
 	out = append(out, checkIptablesChains(r)...)
-	out = append(out, checkIp6tablesDNS()...)
+	out = append(out, checkRejectFallbacks(r)...)
 	return out
 }
 
@@ -678,55 +698,127 @@ func checkIptablesChains(r config.Routing) []doctorCheck {
 	return checks
 }
 
-func checkIp6tablesDNS() []doctorCheck {
-	out, code, err := runCmd("ip6tables", "-t", "filter", "-S", "INPUT")
-	if code == -1 {
-		return []doctorCheck{{Name: "ip6tables", Status: "warn", Detail: "ip6tables unavailable: " + err.Error()}}
+// rejectExpect 描述一条「端口级 REJECT 兜底」规则集合：
+// 在 (Family, Chain) 上对 tcp+udp 各有一条 `--dport DPort -j REJECT`。
+// IIf 非空表示规则必须带 `-i <IIf>`——FORWARD 链用来收窄到 LAN 入向。
+type rejectExpect struct {
+	Family string // "iptables" 或 "ip6tables"
+	Chain  string // "INPUT" 或 "FORWARD"
+	IIf    string // 期望的 `-i` 入接口；INPUT 链通常留空
+	DPort  string
+	Reason string // 失败诊断里给出的"为什么需要这条规则"提示
+}
+
+// expectedRejectChains 与 assets/shell/startup.sh 2.4/2.5 节一一对应。
+//   - v6 × INPUT × 53：防"以路由器为 DNS"的 v6 查询泄漏（无需 -i）
+//   - v6 × FORWARD × 53：防 LAN 客户端绕过到公网 v6 DNS（-i LanIface 收窄）
+//   - v4+v6 × FORWARD × 853：防 DoT(tcp)/DoQ-DTLS(udp) 绕过劫持（-i LanIface 收窄）
+// 注：
+//   - IPv4 53 不在此列——它走 nat/PREROUTING REDIRECT 到 sing-box-dns，
+//     由 checkIptablesChains 的 expectedJumps 覆盖。
+//   - 853 只需 FORWARD：路由器自身不对外提供 DoT/DoQ，无 INPUT 风险面。
+//   - FORWARD 加 -i 避免误拦 VPN / 访客网 / WAN 端口转发等非 LAN 流量。
+func expectedRejectChains(lanIface string) []rejectExpect {
+	return []rejectExpect{
+		{"ip6tables", "INPUT", "", "53", "IPv6 DNS could leak via router-local lookups"},
+		{"ip6tables", "FORWARD", lanIface, "53", "IPv6 DNS could leak via LAN→public v6 resolver"},
+		{"iptables", "FORWARD", lanIface, "853", "DoT/DoQ to public servers could bypass plain-53 hijack"},
+		{"ip6tables", "FORWARD", lanIface, "853", "IPv6 DoT/DoQ to public servers could bypass plain-53 hijack"},
 	}
-	if code != 0 {
-		return []doctorCheck{{Name: "ip6tables INPUT", Status: "fail", Detail: fmt.Sprintf("ip6tables -S INPUT exit %d", code)}}
-	}
-	rules := parseIptablesS(out)
+}
+
+// checkRejectFallbacks 巡检所有「应该存在的 REJECT 兜底」规则。
+// 每个 (family, chain, iif, port) 对 tcp+udp 各检一条；缺失 → fail；
+// 前置干扰 → warn。family 不可用（如机器没装 ip6tables）只在该 family
+// 第一次被引用时报一条 warn，后续该 family 的 chain 直接跳过，避免刷屏。
+func checkRejectFallbacks(r config.Routing) []doctorCheck {
+	type key struct{ family, chain string }
+	cache := map[key][]iptRule{}
+	unavailableFamily := map[string]bool{}
 	var checks []doctorCheck
-	for _, proto := range []string{"tcp", "udp"} {
-		var ours *iptRule
-		for i := range rules {
-			rl := rules[i]
-			if rl.Target == "REJECT" && rl.Proto == proto && rl.DPort == "53" {
-				ours = &rl
-				break
-			}
+
+	loadChain := func(family, chain string) ([]iptRule, bool) {
+		if unavailableFamily[family] {
+			return nil, false
 		}
-		if ours == nil {
+		k := key{family, chain}
+		if r, ok := cache[k]; ok {
+			return r, r != nil
+		}
+		out, code, err := runCmd(family, "-t", "filter", "-S", chain)
+		if code == -1 {
+			unavailableFamily[family] = true
 			checks = append(checks, doctorCheck{
-				Name:   "ip6tables INPUT REJECT 53/" + proto,
-				Status: "fail",
-				Detail: "missing — IPv6 DNS could leak",
+				Name:   family,
+				Status: "warn",
+				Detail: family + " unavailable: " + err.Error(),
 			})
+			return nil, false
+		}
+		if code != 0 {
+			cache[k] = nil
+			checks = append(checks, doctorCheck{
+				Name:   family + " " + chain,
+				Status: "fail",
+				Detail: fmt.Sprintf("%s -S %s exit %d", family, chain, code),
+			})
+			return nil, false
+		}
+		rules := parseIptablesS(out)
+		cache[k] = rules
+		return rules, true
+	}
+
+	for _, exp := range expectedRejectChains(r.LanIface) {
+		rules, ok := loadChain(exp.Family, exp.Chain)
+		if !ok {
 			continue
 		}
-		checks = append(checks, doctorCheck{
-			Name:   "ip6tables INPUT REJECT 53/" + proto,
-			Status: "pass",
-			Detail: fmt.Sprintf("line %d", ours.Index),
-		})
-		var prior []iptRule
-		for _, p := range rules {
-			if p.Index < ours.Index {
-				prior = append(prior, p)
+		for _, proto := range []string{"tcp", "udp"} {
+			label := fmt.Sprintf("%s %s REJECT %s/%s", exp.Family, exp.Chain, exp.DPort, proto)
+			if exp.IIf != "" {
+				label = fmt.Sprintf("%s %s -i %s REJECT %s/%s", exp.Family, exp.Chain, exp.IIf, exp.DPort, proto)
 			}
-		}
-		target := interfererTarget{Proto: proto, DPort: "53"}
-		for _, h := range findInterferers(prior, target) {
-			if h.Target == "REJECT" {
+			var ours *iptRule
+			for i := range rules {
+				rl := rules[i]
+				if rl.Target == "REJECT" && rl.Proto == proto && rl.DPort == exp.DPort && rl.IIf == exp.IIf {
+					ours = &rl
+					break
+				}
+			}
+			if ours == nil {
+				checks = append(checks, doctorCheck{
+					Name:   label,
+					Status: "fail",
+					Detail: "missing — " + exp.Reason,
+				})
 				continue
 			}
 			checks = append(checks, doctorCheck{
-				Name:   fmt.Sprintf("ip6tables INPUT line %d", h.Index),
-				Status: "warn",
-				Detail: fmt.Sprintf("%s %s before our REJECT 53/%s — may bypass IPv6 DNS fallback [%s]",
-					h.Target, h.Proto, proto, strings.TrimPrefix(h.Spec, "-A INPUT ")),
+				Name:   label,
+				Status: "pass",
+				Detail: fmt.Sprintf("line %d", ours.Index),
 			})
+			var prior []iptRule
+			for _, p := range rules {
+				if p.Index < ours.Index {
+					prior = append(prior, p)
+				}
+			}
+			target := interfererTarget{Proto: proto, DPort: exp.DPort, IIf: exp.IIf}
+			for _, h := range findInterferers(prior, target) {
+				if h.Target == "REJECT" {
+					continue
+				}
+				checks = append(checks, doctorCheck{
+					Name:   fmt.Sprintf("%s %s line %d", exp.Family, exp.Chain, h.Index),
+					Status: "warn",
+					Detail: fmt.Sprintf("%s %s before our REJECT %s/%s — may bypass fallback [%s]",
+						h.Target, h.Proto, exp.DPort, proto,
+						strings.TrimPrefix(h.Spec, "-A "+exp.Chain+" ")),
+				})
+			}
 		}
 	}
 	return checks

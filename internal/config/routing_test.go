@@ -14,6 +14,7 @@ func TestDefaultRouting(t *testing.T) {
 		"Tun":          "utun",
 		"FakeIP":       "28.0.0.0/8",
 		"LAN":          "192.168.50.0/24",
+		"LanIface":     "br0",
 		"RouteTable":   7892,
 		"ProxyPorts":   "22,80,443,8080,8443",
 	}
@@ -59,6 +60,7 @@ func TestRoutingEnvVars(t *testing.T) {
 		"TUN":           "utun",
 		"FAKEIP":        "28.0.0.0/8",
 		"LAN":           "192.168.50.0/24",
+		"LAN_IFACE":     "br0",
 		"ROUTE_TABLE":   "7892",
 		"PROXY_PORTS":   "22,80,443,8080,8443",
 		"CN_IP_CIDR":    "/opt/home/sing-router/var/cn.txt",

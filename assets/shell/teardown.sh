@@ -14,6 +14,7 @@ set -u
 : "${ROUTE_TABLE:?ROUTE_TABLE not set}"
 : "${PROXY_PORTS:?PROXY_PORTS not set}"
 : "${FAKEIP:?FAKEIP not set}"
+: "${LAN_IFACE:?LAN_IFACE not set}"
 
 # ---- DNS 劫持入口 ----
 iptables -t nat -D PREROUTING -p tcp --dport 53 -j sing-box-dns 2>/dev/null || true
@@ -37,8 +38,18 @@ iptables -t mangle -X sing-box-mark 2>/dev/null || true
 iptables -D FORWARD -o "$TUN" -j ACCEPT 2>/dev/null || true
 
 # ---- IPv6 DNS 兜底 ----
-ip6tables -D INPUT -p tcp --dport 53 -j REJECT 2>/dev/null || true
+# -D 必须与 startup -A 的完整 spec 一致：TCP 装的时候带了 --reject-with
+# tcp-reset，删的时候必须也带；UDP 走默认 REJECT，两边都不写 reject-with。
+ip6tables -D INPUT -p tcp --dport 53 -j REJECT --reject-with tcp-reset 2>/dev/null || true
 ip6tables -D INPUT -p udp --dport 53 -j REJECT 2>/dev/null || true
+ip6tables -D FORWARD -i "$LAN_IFACE" -p tcp --dport 53 -j REJECT --reject-with tcp-reset 2>/dev/null || true
+ip6tables -D FORWARD -i "$LAN_IFACE" -p udp --dport 53 -j REJECT 2>/dev/null || true
+
+# ---- DoT / DoQ 阻断 (853) ----
+for cmd in iptables ip6tables; do
+    $cmd -D FORWARD -i "$LAN_IFACE" -p tcp --dport 853 -j REJECT --reject-with tcp-reset 2>/dev/null || true
+    $cmd -D FORWARD -i "$LAN_IFACE" -p udp --dport 853 -j REJECT 2>/dev/null || true
+done
 
 # ---- 路由表 + rule ----
 # ip rule add 不幂等：startup.sh 每次都新增一条

@@ -12,6 +12,7 @@ type Routing struct {
 	Tun          string
 	FakeIP       string
 	LAN          string
+	LanIface     string // LAN 网桥接口名（startup.sh 2.4/2.5 节 FORWARD 兜底用 `-i` 收窄）
 	RouteTable   int
 	ProxyPorts   string
 }
@@ -27,6 +28,7 @@ func DefaultRouting() Routing {
 		Tun:          "utun",
 		FakeIP:       "28.0.0.0/8",
 		LAN:          "192.168.50.0/24",
+		LanIface:     "br0",
 		RouteTable:   7892,
 		ProxyPorts:   "22,80,443,8080,8443",
 	}
@@ -59,6 +61,9 @@ func LoadRouting(cfg *DaemonConfig) Routing {
 	if cfg.Router.LAN != nil {
 		r.LAN = *cfg.Router.LAN
 	}
+	if cfg.Router.LanIface != nil {
+		r.LanIface = *cfg.Router.LanIface
+	}
 	if cfg.Router.RouteTable != nil {
 		r.RouteTable = *cfg.Router.RouteTable
 	}
@@ -79,6 +84,7 @@ func (r Routing) EnvVars(cnIPCidrPath string) map[string]string {
 		"TUN":           r.Tun,
 		"FAKEIP":        r.FakeIP,
 		"LAN":           r.LAN,
+		"LAN_IFACE":     r.LanIface,
 		"ROUTE_TABLE":   strconv.Itoa(r.RouteTable),
 		"PROXY_PORTS":   r.ProxyPorts,
 		"CN_IP_CIDR":    cnIPCidrPath,

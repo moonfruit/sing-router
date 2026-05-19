@@ -137,7 +137,7 @@ func TestStartupShellRequiresEnvVars(t *testing.T) {
 	}
 	s := string(data)
 	for _, name := range []string{"DNS_PORT", "REDIRECT_PORT", "ROUTE_MARK", "BYPASS_MARK",
-		"TUN", "ROUTE_TABLE", "PROXY_PORTS", "FAKEIP", "LAN"} {
+		"TUN", "ROUTE_TABLE", "PROXY_PORTS", "FAKEIP", "LAN", "LAN_IFACE"} {
 		// 期望脚本通过 : "${NAME:?...}" 强制要求该变量
 		needle := `: "${` + name + `:?`
 		if !strings.Contains(s, needle) {
