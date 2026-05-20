@@ -270,7 +270,11 @@ const fixturePreroutingMangle = `-P PREROUTING ACCEPT
 -A PREROUTING -d 28.0.0.0/8 -p udp -j sing-box-mark
 `
 
+// 真机 FORWARD 链：startup.sh 先 `-I` 装 `-o $TUN -j ACCEPT`，再 `-I` 装
+// 2.5 节的 853 REJECT 兜底，REJECT 自然落到 ACCEPT 上方。fixture 如实复现。
 const fixtureForward = `-P FORWARD ACCEPT
+-A FORWARD -i br0 -p tcp -m tcp --dport 853 -j REJECT --reject-with tcp-reset
+-A FORWARD -i br0 -p udp -m udp --dport 853 -j REJECT
 -A FORWARD -o utun -j ACCEPT
 `
 
@@ -336,6 +340,36 @@ func TestCheckIptablesChains_AcceptBeforeJumpWarns(t *testing.T) {
 	hit := findCheck(checks, "iptables nat/PREROUTING line 1")
 	if hit == nil || hit.Status != "warn" {
 		t.Fatalf("expected warn for line 1 ACCEPT, got %+v", checks)
+	}
+}
+
+// startup.sh 2.5 节的 853 REJECT 兜底刻意排在 `-o $TUN -j ACCEPT` 之前，
+// 是 sing-router 自家规则（checkRejectFallbacks 反而要求它们存在），干扰
+// 扫描不应把它们报成 "may swallow proxied traffic"。
+func TestCheckIptablesChains_RejectFallbackNotInterferer(t *testing.T) {
+	stubRunReadOnly(t, chainCmds(nil)) // fixtureForward 已含 853 REJECT 前置
+	checks := checkIptablesChains(config.DefaultRouting())
+	for _, c := range checks {
+		if strings.HasPrefix(c.Name, "iptables filter/FORWARD line") {
+			t.Fatalf("own 853 REJECT fallback flagged as interferer: %+v", c)
+		}
+	}
+}
+
+// 兜底豁免只对自家 REJECT 规则生效——端口不在 expectedRejectChains 列表里
+// 的外部 REJECT 仍应被报为干扰。
+func TestCheckIptablesChains_ForeignRejectBeforeAcceptWarns(t *testing.T) {
+	const foreignReject = `-P FORWARD ACCEPT
+-A FORWARD -i br0 -p tcp -m tcp --dport 443 -j REJECT
+-A FORWARD -o utun -j ACCEPT
+`
+	stubRunReadOnly(t, chainCmds(map[string]cmdResult{
+		"iptables -t filter -S FORWARD": {out: foreignReject, code: 0},
+	}))
+	checks := checkIptablesChains(config.DefaultRouting())
+	hit := findCheck(checks, "iptables filter/FORWARD line 1")
+	if hit == nil || hit.Status != "warn" {
+		t.Fatalf("expected warn for foreign 443 REJECT before ACCEPT, got %+v", checks)
 	}
 }
 
