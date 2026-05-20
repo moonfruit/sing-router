@@ -322,6 +322,25 @@ func iifOverlap(a, b string) bool {
 	return a == b
 }
 
+// isExpectedRejectFallback 判断 rule 是否为 sing-router 经 startup.sh 2.4/2.5
+// 节自行安装的「端口级 REJECT 兜底」（见 expectedRejectChains）。这些 REJECT
+// 刻意排在 FORWARD 链 `-o $TUN -j ACCEPT` 之前——startup.sh 先 `-I` 装 ACCEPT、
+// 再 `-I` 装 REJECT，REJECT 自然落到 ACCEPT 上方。干扰扫描遇到自家规则不应
+// 报「may swallow proxied traffic」，否则 checkIptablesChains 会与
+// checkRejectFallbacks 自相矛盾（后者反而要求这些 REJECT 必须存在）。
+func isExpectedRejectFallback(rule iptRule, family, chain, lanIface string) bool {
+	if rule.Target != "REJECT" {
+		return false
+	}
+	for _, exp := range expectedRejectChains(lanIface) {
+		if exp.Family == family && exp.Chain == chain &&
+			exp.IIf == rule.IIf && exp.DPort == rule.DPort {
+			return true
+		}
+	}
+	return false
+}
+
 // findInterferers 返回 prior 中可能拦截 ours 流量的规则。
 func findInterferers(prior []iptRule, ours interfererTarget) []iptRule {
 	blocking := map[string]bool{
@@ -644,6 +663,9 @@ func checkIptablesChains(r config.Routing) []doctorCheck {
 		for _, h := range findInterferers(prior, target) {
 			if h.Target == want.Target {
 				continue // 同 target 已通过 duplicate 警告处理
+			}
+			if isExpectedRejectFallback(h, "iptables", want.Chain, r.LanIface) {
+				continue // sing-router 自家 REJECT 兜底，刻意前置，非外部干扰
 			}
 			checks = append(checks, doctorCheck{
 				Name:   fmt.Sprintf("iptables %s/%s line %d", want.Table, want.Chain, h.Index),
