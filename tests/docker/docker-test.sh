@@ -159,6 +159,15 @@ echo "daemon will run with sing-box source: ${sing_box_source}"
 #     `failed`。优雅停留给 Phase F 的 `sing-router uninstall`（自带 SIGTERM→5s→
 #     SIGKILL 兜底，见 internal/cli/uninstall.go::stopDaemonByPidFile）。
 step "Phase E  daemon start/stop via init.d (under ash)"
+
+# docker 默认 bridge 网络跑不动 QUIC：嵌入 dns.json 的 dns-direct / dns-one /
+# dns-cloudflare 都是 h3（DoH3 over QUIC），在容器里 QUIC 握不上手 → sing-box
+# `lookup <域名>` 超时 → remote rule_set 初始化失败 → FATAL、daemon 起不来。
+# 真机家庭宽带 h3 可用，故不改嵌入默认配置；只把测试容器内已落地的 dns.json
+# 就地改成 https（DoH over TCP/443），绕开容器对 QUIC 的限制。
+ex 'sed -i "s/\"type\": \"h3\"/\"type\": \"https\"/g" /opt/home/sing-router/config.d/dns.json'
+ex '! grep -q "\"type\": \"h3\"" /opt/home/sing-router/config.d/dns.json'
+
 ex '/opt/etc/init.d/S99sing-router start'
 
 if [ "$sing_box_source" = "real (gitee download)" ]; then
