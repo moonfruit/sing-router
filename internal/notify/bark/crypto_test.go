@@ -5,7 +5,9 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"encoding/base64"
+	"encoding/hex"
 	"fmt"
+	"os/exec"
 	"testing"
 )
 
@@ -101,6 +103,68 @@ func TestNewCipherSpecBadParams(t *testing.T) {
 	}
 	if _, err := newCipherSpec("AES128", "XTS", []byte(keyOf(16))); err == nil {
 		t.Error("bogus mode should fail")
+	}
+}
+
+// TestEncryptIVIsByteSafe 守住关键修复：iv 必须是可见 ASCII 字符串，不能是任意
+// 随机字节——否则 Bark 服务器 JSON 编码时会用 U+FFFD 替换非法 UTF-8 字节，破坏 IV。
+func TestEncryptIVIsByteSafe(t *testing.T) {
+	for _, mode := range []string{"CBC", "GCM"} {
+		spec, err := newCipherSpec("AES256", mode, []byte(keyOf(32)))
+		if err != nil {
+			t.Fatalf("%s: %v", mode, err)
+		}
+		_, iv, err := spec.encrypt([]byte(`{"body":"x"}`))
+		if err != nil {
+			t.Fatalf("%s: encrypt: %v", mode, err)
+		}
+		if iv == "" {
+			t.Fatalf("%s: iv should not be empty", mode)
+		}
+		for i, c := range []byte(iv) {
+			if c < 0x20 || c > 0x7e {
+				t.Errorf("%s: iv byte %d = %#x is not printable ASCII", mode, i, c)
+			}
+		}
+		if mode == "CBC" && len(iv) != 16 {
+			t.Errorf("CBC iv length = %d, want 16", len(iv))
+		}
+	}
+}
+
+// TestEncryptCBCOpenSSLInterop 证明我们的 AES-256-CBC 密文能被 openssl 以
+// example.sh 同款方案解开：key / iv 都按「字符串的字节」处理。这正是 Bark 的
+// 加密契约，跑通即说明 wire 层与 Bark App 兼容。
+func TestEncryptCBCOpenSSLInterop(t *testing.T) {
+	openssl, err := exec.LookPath("openssl")
+	if err != nil {
+		t.Skip("openssl not available")
+	}
+	keyStr := keyOf(32) // 32 字符 → AES-256 的 32 字节密钥
+	spec, err := newCipherSpec("AES256", "CBC", []byte(keyStr))
+	if err != nil {
+		t.Fatal(err)
+	}
+	plaintext := []byte(`{"body":"test","sound":"birdsong"}`)
+	ctB64, iv, err := spec.encrypt(plaintext)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ct, err := base64.StdEncoding.DecodeString(ctB64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// openssl 的 -K/-iv 需 hex；Bark 方案里 key/iv 都是「字符串的字节」。
+	cmd := exec.Command(openssl, "enc", "-d", "-aes-256-cbc",
+		"-K", hex.EncodeToString([]byte(keyStr)),
+		"-iv", hex.EncodeToString([]byte(iv)))
+	cmd.Stdin = bytes.NewReader(ct)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("openssl decrypt failed: %v\n%s", err, out)
+	}
+	if !bytes.Equal(out, plaintext) {
+		t.Errorf("openssl decrypt mismatch:\n got  %q\n want %q", out, plaintext)
 	}
 }
 

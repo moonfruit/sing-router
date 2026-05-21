@@ -46,8 +46,28 @@ func newCipherSpec(algorithm, mode string, key []byte) (*cipherSpec, error) {
 	return &cipherSpec{mode: m, key: key}, nil
 }
 
-// encrypt 加密 plaintext，返回 (base64 密文, iv 原始字节串)。ECB 无 iv，返回空串。
-// iv 随机生成，由 caller 作为 Bark 的 iv 参数随密文一起发送。
+// ivCharset 是随机 IV 的取值字符集。Bark 把 iv 参数当**字符串**、直接用其字节
+// 作为 AES IV（见 example.sh：iv='0000000000000000' 是 16 字符串）。所以 IV 必须
+// 是字节安全的可见 ASCII 定长字符串——不能是任意随机字节：非 UTF-8 字节会在
+// Bark 服务器 JSON 编码 APNs 负载时被 Go encoding/json 替换成 U+FFFD，破坏 IV
+// 导致 App 侧 “Decryption failed”。
+const ivCharset = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+
+// randomIVString 生成 n 个字符的随机 IV 字符串；n 即 AES IV/nonce 的字节数。
+func randomIVString(n int) (string, error) {
+	buf := make([]byte, n)
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
+	}
+	for i := range buf {
+		buf[i] = ivCharset[int(buf[i])%len(ivCharset)]
+	}
+	return string(buf), nil
+}
+
+// encrypt 加密 plaintext，返回 (base64 密文, iv 字符串)。ECB 无 iv，返回空串。
+// iv 是随机生成的可见 ASCII 字符串，由 caller 作为 Bark 的 iv 参数随密文一起发送；
+// 其字节同时就是 AES 的 IV/nonce。
 func (s *cipherSpec) encrypt(plaintext []byte) (ciphertext, iv string, err error) {
 	block, err := aes.NewCipher(s.key)
 	if err != nil {
@@ -55,14 +75,14 @@ func (s *cipherSpec) encrypt(plaintext []byte) (ciphertext, iv string, err error
 	}
 	switch s.mode {
 	case "CBC":
-		ivBytes := make([]byte, aes.BlockSize)
-		if _, err := rand.Read(ivBytes); err != nil {
+		iv, err := randomIVString(aes.BlockSize)
+		if err != nil {
 			return "", "", err
 		}
 		padded := pkcs7Pad(plaintext, aes.BlockSize)
 		out := make([]byte, len(padded))
-		cipher.NewCBCEncrypter(block, ivBytes).CryptBlocks(out, padded)
-		return base64.StdEncoding.EncodeToString(out), string(ivBytes), nil
+		cipher.NewCBCEncrypter(block, []byte(iv)).CryptBlocks(out, padded)
+		return base64.StdEncoding.EncodeToString(out), iv, nil
 	case "ECB":
 		padded := pkcs7Pad(plaintext, aes.BlockSize)
 		out := make([]byte, len(padded))
@@ -75,12 +95,12 @@ func (s *cipherSpec) encrypt(plaintext []byte) (ciphertext, iv string, err error
 		if err != nil {
 			return "", "", err
 		}
-		nonce := make([]byte, gcm.NonceSize())
-		if _, err := rand.Read(nonce); err != nil {
+		nonce, err := randomIVString(gcm.NonceSize())
+		if err != nil {
 			return "", "", err
 		}
-		out := gcm.Seal(nil, nonce, plaintext, nil)
-		return base64.StdEncoding.EncodeToString(out), string(nonce), nil
+		out := gcm.Seal(nil, []byte(nonce), plaintext, nil)
+		return base64.StdEncoding.EncodeToString(out), nonce, nil
 	default:
 		return "", "", fmt.Errorf("unsupported encryption mode %q", s.mode)
 	}
