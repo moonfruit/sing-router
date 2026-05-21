@@ -112,6 +112,35 @@ on_start_delay_sec = 300
 # 也可由环境变量 SING_ROUTER_SEQ_URL / SING_ROUTER_SEQ_API_KEY 覆盖
 # 对应字段（仅覆盖值，enabled 仍由本节决定，避免误启用）。
 
+[notify]
+# 多渠道状态变化通知（Bark 等）。默认完全关闭——enabled=false 或没有任何
+# enabled 的渠道时不构造 notifier、不订阅 bus。
+#
+# 哪些事件会通知由内置目录决定（资源更新 apply.ok、sing-box 崩溃/恢复、路由
+# 丢失、daemon 启停、各类失败等）；用户只能开关与调阈值，不能改文案。
+#
+# enabled        = false
+# min_priority   = "low"     # 全局阈值 low/normal/high/critical；低于它的通知丢弃
+# disabled_kinds = ["sync.item.failed"]   # 按 Kind（=事件 EventID）精确关闭
+# close_drain_timeout_seconds = 5          # 关停时排空 pending 通知的预算秒数
+#
+# 渠道用 array-of-tables，可配多个（手机 / iPad 各设阈值）：
+# [[notify.bark]]
+# name         = "phone"
+# enabled      = true
+# base_url     = "https://api.day.app"   # 可换成自建 bark-server
+# key          = ""                      # Bark 设备 key（必填）
+# group        = "sing-router"           # 通知中心归组名
+# min_priority = "low"                   # 可选，本渠道单独抬高阈值（只能更严）
+#
+# 可选端到端加密推送（需在 Bark App 配置一致的算法与 key）：
+# [notify.bark.encryption]
+# algorithm = "AES256"     # AES128 / AES192 / AES256
+# mode      = "CBC"        # CBC / ECB / GCM（Bark 官方文档仅明确 CBC）
+# key       = ""           # 长度须匹配 algorithm（16/24/32 字节）
+#
+# 也可由环境变量 SING_ROUTER_BARK_KEY 覆盖第一个 [[notify.bark]] 的 key。
+
 [router]
 # dns_port      = 1053
 # redirect_port = 7892

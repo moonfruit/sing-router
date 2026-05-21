@@ -11,6 +11,7 @@ import (
 
 	"github.com/moonfruit/sing2seq/clef"
 
+	"github.com/moonfruit/sing-router/internal/notify"
 	syncpkg "github.com/moonfruit/sing-router/internal/sync"
 )
 
@@ -35,6 +36,10 @@ type Options struct {
 	Updater *syncpkg.Updater
 	Sync    SyncLoopConfig
 	Applier *Applier
+
+	// Notifier 是可选的多渠道通知引擎。非 nil 时 reportPanic 会经它同步推送崩溃
+	// 通知（panic 显式路径，见 docs/adr/0001）。其余状态变化走 bus 订阅，与此无关。
+	Notifier *notify.Notifier
 }
 
 // Run 阻塞跑 daemon：HTTP listener + supervisor 主循环 + signal handling。
@@ -46,6 +51,10 @@ func Run(ctx context.Context, opts Options) error {
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+
+	// 让 reportPanic 能经 Notifier 同步推送崩溃通知（panic 显式路径）。
+	setPanicNotifier(opts.Notifier)
+	defer setPanicNotifier(nil)
 
 	deps := APIDeps{
 		Supervisor:   opts.Supervisor,
@@ -115,6 +124,10 @@ func Run(ctx context.Context, opts Options) error {
 	if err := opts.Supervisor.Boot(ctx); err != nil {
 		opts.Emitter.Fatal("supervisor", "supervisor.boot.failed", "boot failed: {Err}", map[string]any{"Err": err.Error()})
 		// fatal 状态保持 HTTP 存活，等待 SIGTERM 或 /shutdown
+	} else {
+		opts.Emitter.Info("daemon", "daemon.started",
+			"daemon started at {Rundir} (version {Version})",
+			map[string]any{"Rundir": opts.Rundir, "Version": opts.Version})
 	}
 
 	// 路由巡检：兜底外部 `kill -HUP <sing-box-pid>` 触发 sing-box reload→TUN 重建
@@ -159,6 +172,9 @@ func Run(ctx context.Context, opts Options) error {
 	_ = opts.Supervisor.Shutdown(sctx)
 	<-runDone
 	<-httpDone
+	// daemon.stopped 必须在此发：EmitterStack.Close 由 realRunDaemon 的 defer 在本
+	// 函数返回后才跑，notify sink 此刻仍订阅着 bus，事件随后被 Close 的 drain 刷出。
+	opts.Emitter.Info("daemon", "daemon.stopped", "daemon stopped", nil)
 	return nil
 }
 

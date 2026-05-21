@@ -15,6 +15,7 @@ import (
 	"github.com/moonfruit/sing-router/internal/daemon"
 	"github.com/moonfruit/sing-router/internal/gitee"
 	log "github.com/moonfruit/sing-router/internal/log"
+	"github.com/moonfruit/sing-router/internal/notify"
 	"github.com/moonfruit/sing-router/internal/shell"
 	syncpkg "github.com/moonfruit/sing-router/internal/sync"
 	"github.com/moonfruit/sing-router/internal/version"
@@ -46,6 +47,12 @@ func realRunDaemon(ctx context.Context, rundir string) error {
 	if seqAttaching && seqLevel < emitterFloor {
 		emitterFloor = seqLevel
 	}
+	// notify 目录里最低级事件是 Info（apply.ok / daemon.started）。接入通知时
+	// emitter floor 必须 ≤ Info，否则 [log].level="warn" 会让这些事件根本不进 bus。
+	notifyAttaching := notifyWillAttach(cfg.Notify)
+	if notifyAttaching && log.LevelInfo < emitterFloor {
+		emitterFloor = log.LevelInfo
+	}
 	logPath := filepath.Join(rundir, cfg.Log.File)
 	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
 		return fmt.Errorf("mkdir log dir: %w", err)
@@ -74,10 +81,11 @@ func realRunDaemon(ctx context.Context, rundir string) error {
 		Writer:         writer,
 	})
 	defer func() {
-		// shutdown 总预算 = [seq].close_drain_timeout_seconds + 一点点空隙
-		// 留给 Bus drain 与 Writer flush。其它 extras 不存在时这个 ctx
-		// 也不会拖延 Close。
-		drainBudget := time.Duration(cfg.Seq.SeqCloseDrainTimeoutSeconds())*time.Second + 2*time.Second
+		// shutdown 总预算覆盖并行 drain 的所有 extras（seq + notify）：取两者
+		// drain 超时的较大者，再加一点空隙留给 Bus drain 与 Writer flush。
+		drainSec := max(cfg.Seq.SeqCloseDrainTimeoutSeconds(),
+			cfg.Notify.NotifyCloseDrainTimeoutSeconds())
+		drainBudget := time.Duration(drainSec)*time.Second + 2*time.Second
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), drainBudget)
 		defer cancel()
 		_ = stack.Close(shutdownCtx)
@@ -104,6 +112,28 @@ func realRunDaemon(ctx context.Context, rundir string) error {
 	case cfg.Seq.Enabled && cfg.Seq.URL == "":
 		em.Warn("seq", "seq.disabled",
 			"[seq].enabled=true but url is empty; sink not attached", nil)
+	}
+
+	// 多渠道通知子系统接入。Enabled=false 或无可用渠道时跳过。notifier 用于
+	// daemon panic 路径的同步通知（见 daemon.Options.Notifier）。
+	var notifier *notify.Notifier
+	if notifyAttaching {
+		n, attached, warns := attachNotifySink(stack, cfg.Notify)
+		notifier = n
+		for _, w := range warns {
+			em.Warn("notify", "notify.config.warning", "{Warn}", map[string]any{"Warn": w})
+		}
+		if notifier != nil {
+			em.Info("notify", "notify.enabled",
+				"notify sink attached: channels={Channels} min_priority={MinPriority}",
+				map[string]any{"Channels": attached, "MinPriority": cfg.Notify.MinPriority})
+		} else {
+			em.Warn("notify", "notify.disabled",
+				"[notify].enabled=true but no channel could be constructed; sink not attached", nil)
+		}
+	} else if cfg.Notify.Enabled {
+		em.Warn("notify", "notify.disabled",
+			"[notify].enabled=true but no usable channel configured; sink not attached", nil)
 	}
 
 	// 把 var/zoo.raw.json（由 sync.Updater 拉取）预处理写入 config.d/zoo.json。
@@ -268,6 +298,7 @@ func realRunDaemon(ctx context.Context, rundir string) error {
 		Supervisor: sup,
 		Updater:    updater,
 		Applier:    applier,
+		Notifier:   notifier,
 		Sync: daemon.SyncLoopConfig{
 			IntervalSec:     cfg.Sync.SyncIntervalSeconds(),
 			OnStartDelaySec: cfg.Sync.SyncOnStartDelaySec(),

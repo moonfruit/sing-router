@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -13,6 +14,8 @@ import (
 
 	"github.com/moonfruit/sing-router/internal/config"
 	"github.com/moonfruit/sing-router/internal/firmware"
+	"github.com/moonfruit/sing-router/internal/notify"
+	"github.com/moonfruit/sing-router/internal/notify/bark"
 )
 
 type doctorOpts struct {
@@ -111,6 +114,8 @@ func runDoctorChecks(rundir string, opts doctorOpts) []doctorCheck {
 				out = append(out, doctorCheck{Name: "log.json timestamp", Status: "warn", Detail: "must be true; otherwise sing-box log parsing degrades"})
 			}
 		}
+
+		out = append(out, checkNotify(cfg)...)
 	}
 
 	out = append(out, runRoutingChecks(cfg, opts)...)
@@ -170,6 +175,55 @@ func checkDirExists(path, label string) doctorCheck {
 func checkExistsAs(path, label, warnOrFail string) doctorCheck {
 	if _, err := os.Stat(path); err != nil {
 		return doctorCheck{Name: label, Status: warnOrFail, Detail: err.Error()}
+	}
+	return doctorCheck{Name: label, Status: "pass"}
+}
+
+// checkNotify 只读校验 [notify] 配置：全局阈值、是否有可用渠道、各 Bark 渠道的
+// key / base_url / 加密参数是否合法。不发送任何请求——key 是否真能用由
+// `sing-router notify test` 验证。
+func checkNotify(cfg *config.DaemonConfig) []doctorCheck {
+	n := cfg.Notify
+	if !n.Enabled {
+		return []doctorCheck{{Name: "notify", Status: "info", Detail: "disabled ([notify].enabled=false)"}}
+	}
+	var out []doctorCheck
+	if _, ok := notify.ParsePriority(n.MinPriority); !ok {
+		out = append(out, doctorCheck{Name: "notify min_priority", Status: "warn",
+			Detail: fmt.Sprintf("invalid value %q (want low/normal/high/critical)", n.MinPriority)})
+	}
+	enabled := 0
+	for _, b := range n.Bark {
+		if !b.Enabled {
+			continue
+		}
+		enabled++
+		out = append(out, checkBarkChannel(b))
+	}
+	if enabled == 0 {
+		out = append(out, doctorCheck{Name: "notify channels", Status: "warn",
+			Detail: "[notify].enabled=true but no enabled channel"})
+	}
+	return out
+}
+
+func checkBarkChannel(b config.BarkConfig) doctorCheck {
+	name := b.Name
+	if name == "" {
+		name = "(unnamed)"
+	}
+	label := "notify bark/" + name
+	// bark.New 校验 key 非空与加密参数（算法 / key 长度 / 模式）。
+	if _, err := bark.New(barkConfigFrom(b)); err != nil {
+		return doctorCheck{Name: label, Status: "fail", Detail: err.Error()}
+	}
+	if b.BaseURL != "" {
+		if u, err := url.Parse(b.BaseURL); err != nil || u.Scheme == "" || u.Host == "" {
+			return doctorCheck{Name: label, Status: "fail", Detail: "invalid base_url: " + b.BaseURL}
+		}
+	}
+	if _, ok := notify.ParsePriority(b.MinPriority); !ok {
+		return doctorCheck{Name: label, Status: "warn", Detail: "invalid min_priority: " + b.MinPriority}
 	}
 	return doctorCheck{Name: label, Status: "pass"}
 }

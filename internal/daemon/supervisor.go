@@ -441,6 +441,11 @@ func (s *Supervisor) Run(ctx context.Context) error {
 		}
 		backoffMs := s.cfg.BackoffMs[min(s.nextBackoffIdx, len(s.cfg.BackoffMs)-1)]
 		s.nextBackoffIdx++
+		if s.cfg.Emitter != nil {
+			s.cfg.Emitter.Warn("supervisor", "supervisor.child.crashed",
+				"sing-box crashed (crash #{CrashCount} this storm); backing off {BackoffMs}ms before restart",
+				map[string]any{"CrashCount": s.nextBackoffIdx, "BackoffMs": backoffMs})
+		}
 		// 立即拆 iptables：退避期间系统进入 DIRECT，避免「sing-box 死但 iptables
 		// 仍 REDIRECT 到 7892」的连接黑洞。
 		_ = s.Shutdown(ctx)
@@ -451,7 +456,17 @@ func (s *Supervisor) Run(ctx context.Context) error {
 		}
 		if err := s.Startup(ctx); err != nil {
 			// 失败 → state=Fatal，下一次循环顶部会从 Fatal 走 default → return nil。
+			if s.cfg.Emitter != nil {
+				s.cfg.Emitter.Error("supervisor", "supervisor.crash.unrecovered",
+					"sing-box restart after crash failed (crash #{CrashCount} this storm); giving up: {Err}",
+					map[string]any{"CrashCount": s.nextBackoffIdx, "Err": err.Error()})
+			}
 			continue
+		}
+		if s.cfg.Emitter != nil {
+			s.cfg.Emitter.Info("supervisor", "supervisor.recovered",
+				"sing-box recovered after {CrashCount} crash(es) this storm",
+				map[string]any{"CrashCount": s.nextBackoffIdx})
 		}
 		s.nextBackoffIdx = 0
 	}

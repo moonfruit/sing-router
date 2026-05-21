@@ -347,3 +347,108 @@ func TestInstallFirmwareDecode(t *testing.T) {
 	}
 }
 
+func TestLoadDaemonConfigNotifyDefaults(t *testing.T) {
+	cfg, err := LoadDaemonConfig("/nonexistent/daemon.toml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Notify.Enabled {
+		t.Fatalf("default Notify.Enabled should be false")
+	}
+	if cfg.Notify.MinPriority != "low" {
+		t.Fatalf("default Notify.MinPriority = %q, want low", cfg.Notify.MinPriority)
+	}
+	if cfg.Notify.NotifyCloseDrainTimeoutSeconds() != 5 {
+		t.Fatalf("default notify close drain = %d, want 5", cfg.Notify.NotifyCloseDrainTimeoutSeconds())
+	}
+	if len(cfg.Notify.Bark) != 0 {
+		t.Fatalf("default Notify.Bark should be empty, got %d", len(cfg.Notify.Bark))
+	}
+}
+
+func TestLoadDaemonConfigNotifyFromTOML(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "daemon.toml")
+	body := `
+[notify]
+enabled        = true
+min_priority   = "normal"
+disabled_kinds = ["sync.item.failed"]
+close_drain_timeout_seconds = 8
+
+[[notify.bark]]
+name    = "phone"
+enabled = true
+key     = "phone-key"
+
+[[notify.bark]]
+name     = "ipad"
+enabled  = true
+base_url = "https://bark.lan"
+key      = "ipad-key"
+group    = "router"
+[notify.bark.encryption]
+algorithm = "AES256"
+mode      = "CBC"
+key       = "0123456789abcdef0123456789abcdef"
+`
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadDaemonConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Notify.Enabled {
+		t.Fatalf("Notify.Enabled should be true")
+	}
+	if cfg.Notify.MinPriority != "normal" {
+		t.Fatalf("Notify.MinPriority = %q", cfg.Notify.MinPriority)
+	}
+	if len(cfg.Notify.DisabledKinds) != 1 || cfg.Notify.DisabledKinds[0] != "sync.item.failed" {
+		t.Fatalf("Notify.DisabledKinds = %v", cfg.Notify.DisabledKinds)
+	}
+	if cfg.Notify.NotifyCloseDrainTimeoutSeconds() != 8 {
+		t.Fatalf("notify close drain = %d", cfg.Notify.NotifyCloseDrainTimeoutSeconds())
+	}
+	if len(cfg.Notify.Bark) != 2 {
+		t.Fatalf("Notify.Bark len = %d, want 2", len(cfg.Notify.Bark))
+	}
+	// 第一个渠道未给 base_url / group，applyDefaults 应补默认
+	if cfg.Notify.Bark[0].BaseURL != "https://api.day.app" {
+		t.Fatalf("Bark[0].BaseURL = %q", cfg.Notify.Bark[0].BaseURL)
+	}
+	if cfg.Notify.Bark[0].Group != "sing-router" {
+		t.Fatalf("Bark[0].Group = %q", cfg.Notify.Bark[0].Group)
+	}
+	if cfg.Notify.Bark[1].BaseURL != "https://bark.lan" {
+		t.Fatalf("Bark[1].BaseURL = %q", cfg.Notify.Bark[1].BaseURL)
+	}
+	if cfg.Notify.Bark[1].Encryption == nil || cfg.Notify.Bark[1].Encryption.Algorithm != "AES256" {
+		t.Fatalf("Bark[1].Encryption = %+v", cfg.Notify.Bark[1].Encryption)
+	}
+}
+
+func TestEnvOverrideBarkKey(t *testing.T) {
+	t.Setenv(envBarkKey, "key-from-env")
+	dir := t.TempDir()
+	path := filepath.Join(dir, "daemon.toml")
+	body := `
+[notify]
+enabled = true
+
+[[notify.bark]]
+name = "phone"
+key  = "key-from-toml"
+`
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadDaemonConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Notify.Bark[0].Key != "key-from-env" {
+		t.Fatalf("Bark[0].Key env override missed: %q", cfg.Notify.Bark[0].Key)
+	}
+}

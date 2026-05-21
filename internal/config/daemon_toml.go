@@ -20,6 +20,9 @@ const (
 	envSeqAPIKey = "SING_ROUTER_SEQ_API_KEY"
 )
 
+// envBarkKey 覆盖第一个 [[notify.bark]] 渠道的 key（便利覆盖，对照 envSeqAPIKey）。
+const envBarkKey = "SING_ROUTER_BARK_KEY"
+
 // DaemonConfig 反映 daemon.toml 的全部字段；未来 B/C/E/F 模块各自加自己的 section。
 type DaemonConfig struct {
 	Runtime    RuntimeConfig    `toml:"runtime"`
@@ -31,6 +34,7 @@ type DaemonConfig struct {
 	Gitee      GiteeConfig      `toml:"gitee"`
 	Sync       SyncConfig       `toml:"sync"`
 	Seq        SeqConfig        `toml:"seq"`
+	Notify     NotifyConfig     `toml:"notify"`
 	Router     RouterConfig     `toml:"router"`
 	Install    InstallConfig    `toml:"install"`
 }
@@ -146,6 +150,40 @@ type SeqConfig struct {
 	CloseDrainTimeoutSec *int `toml:"close_drain_timeout_seconds"`
 }
 
+// NotifyConfig 控制多渠道通知子系统。默认完全关闭——Enabled=false 或没有任何
+// enabled 的渠道时 daemon 不构造 notifier、不订阅 bus。
+//
+// MinPriority 是全局 Priority 阈值（low/normal/high/critical），低于它的通知被
+// 丢弃；默认 "low" 即不过滤。DisabledKinds 按 Kind（= clef EventID）精确关闭
+// 个别通知。两者与每个渠道自己的 MinPriority 叠加生效。
+type NotifyConfig struct {
+	Enabled              bool         `toml:"enabled"`
+	MinPriority          string       `toml:"min_priority"`
+	DisabledKinds        []string     `toml:"disabled_kinds"`
+	CloseDrainTimeoutSec *int         `toml:"close_drain_timeout_seconds"`
+	Bark                 []BarkConfig `toml:"bark"`
+}
+
+// BarkConfig 是一个 Bark 推送渠道实例。array-of-tables：[[notify.bark]] 可多个
+// （手机 / iPad 各设阈值）。Key 是秘密，可由 SING_ROUTER_BARK_KEY 覆盖第一个实例。
+type BarkConfig struct {
+	Name        string                `toml:"name"`
+	Enabled     bool                  `toml:"enabled"`
+	BaseURL     string                `toml:"base_url"`
+	Key         string                `toml:"key"`
+	Group       string                `toml:"group"`
+	MinPriority string                `toml:"min_priority"`
+	Encryption  *BarkEncryptionConfig `toml:"encryption"`
+}
+
+// BarkEncryptionConfig 开启 Bark 端到端加密推送。Algorithm = AES128/AES192/AES256，
+// Mode = CBC/ECB/GCM；Key 长度须与 Algorithm 匹配（16/24/32 字节）。
+type BarkEncryptionConfig struct {
+	Algorithm string `toml:"algorithm"`
+	Mode      string `toml:"mode"`
+	Key       string `toml:"key"`
+}
+
 type RouterConfig struct {
 	DnsPort      *int    `toml:"dns_port"`
 	RedirectPort *int    `toml:"redirect_port"`
@@ -202,6 +240,9 @@ func applyEnvOverrides(cfg *DaemonConfig) {
 	}
 	if v := os.Getenv(envSeqAPIKey); v != "" {
 		cfg.Seq.APIKey = v
+	}
+	if v := os.Getenv(envBarkKey); v != "" && len(cfg.Notify.Bark) > 0 {
+		cfg.Notify.Bark[0].Key = v
 	}
 }
 
@@ -344,12 +385,35 @@ func applyDefaults(cfg *DaemonConfig) {
 		v := 10
 		cfg.Seq.CloseDrainTimeoutSec = &v
 	}
+	if cfg.Notify.MinPriority == "" {
+		cfg.Notify.MinPriority = "low"
+	}
+	if cfg.Notify.CloseDrainTimeoutSec == nil {
+		v := 5
+		cfg.Notify.CloseDrainTimeoutSec = &v
+	}
+	for i := range cfg.Notify.Bark {
+		if cfg.Notify.Bark[i].BaseURL == "" {
+			cfg.Notify.Bark[i].BaseURL = "https://api.day.app"
+		}
+		if cfg.Notify.Bark[i].Group == "" {
+			cfg.Notify.Bark[i].Group = "sing-router"
+		}
+	}
 }
 
 // SeqCloseDrainTimeoutSeconds 是 CloseDrainTimeoutSec 的安全访问器。未设置回退 10s。
 func (c SeqConfig) SeqCloseDrainTimeoutSeconds() int {
 	if c.CloseDrainTimeoutSec == nil || *c.CloseDrainTimeoutSec <= 0 {
 		return 10
+	}
+	return *c.CloseDrainTimeoutSec
+}
+
+// NotifyCloseDrainTimeoutSeconds 是 NotifyConfig.CloseDrainTimeoutSec 的安全访问器。未设置回退 5s。
+func (c NotifyConfig) NotifyCloseDrainTimeoutSeconds() int {
+	if c.CloseDrainTimeoutSec == nil || *c.CloseDrainTimeoutSec <= 0 {
+		return 5
 	}
 	return *c.CloseDrainTimeoutSec
 }

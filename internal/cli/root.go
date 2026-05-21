@@ -31,6 +31,7 @@ func NewRootCmd() *cobra.Command {
 		newUninstallCmd(),
 		newDoctorCmd(),
 		newUpdateCmd(),
+		newNotifyCmd(),
 	)
 	return cmd
 }
