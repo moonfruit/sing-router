@@ -131,4 +131,29 @@ for cmd in iptables ip6tables; do
         || $cmd -I FORWARD -i "$LAN_IFACE" -p udp --dport 853 -j REJECT
 done
 
+# ===================== 2.6 修复 miniupnpd UPnP 链跳转 =====================
+# 本固件(华硕 / Koolcenter)从不安装 miniupnpd 的链跳转：开机 start_firewall、
+# WAN 重拨 start_nat、甚至 miniupnpd 自身重启都不加 `PREROUTING -j VUPNP` /
+# `FORWARD -j FUPNP`（已实测：干净重启后仍缺）。miniupnpd 只把端口映射写进
+# VUPNP/FUPNP 链，链却无人引用 → 所有 UPnP/NAT-PMP/PCP 入站转发静默失效。
+# 后果：对端是对称 NAT 的 P2P 应用(如 tailscale)拿不到稳定可达端点，打洞
+# 失败只能退回 DERP/relay 中转。本脚本是这台路由器上唯一的 nat-start 落点
+# (开机 + 每次 WAN 重拨都会跑)，在此幂等补回跳转。
+#
+# 只建立、不在 teardown 拆除：这两条链归 miniupnpd 而非 sing-router，不应随
+# sing-router 停止而连累全局 UPnP。链名 VUPNP / FUPNP 为华硕 miniupnpd 约定
+# (见 /etc/upnp/config 的 upnp_nat_chain / upnp_forward_chain)。
+#
+# 仅当链已存在(= miniupnpd 已起、UPnP 已启用)才补跳转：用户若关了 UPnP 则链
+# 不存在，这里不创建空链、不强行启用。结尾 `|| true` 让补跳转失败(如老版
+# iptables 无 -w 时的锁竞争)也不至于中断 sing-router 自身规则的安装。
+if iptables -t nat -nL VUPNP >/dev/null 2>&1; then
+    iptables -t nat -C PREROUTING -j VUPNP 2>/dev/null \
+        || iptables -t nat -A PREROUTING -j VUPNP || true
+fi
+if iptables -nL FUPNP >/dev/null 2>&1; then
+    iptables -C FORWARD -j FUPNP 2>/dev/null \
+        || iptables -A FORWARD -j FUPNP || true
+fi
+
 echo "sing-router startup: rules installed"

@@ -25,6 +25,14 @@ fi
 
 case "$ACTION" in
     start_nat|"" )
+        # 错峰避让：固件 start_nat / 开机 start_firewall 会并发重建 nat 表、(重)启
+        # miniupnpd。这台路由器的 iptables(v1.4.12)不支持 -w 等锁，多方同时改表会撞
+        # xtables 锁、报 "Resource temporarily unavailable" 静默失败（实测 sing-router
+        # 自身重启都曾因此首次失败）。先睡几秒让固件那阵 iptables 风暴沉淀、miniupnpd
+        # 把 VUPNP/FUPNP 链建好，再让 sing-router 动手——既降低自身失败概率，也确保
+        # startup.sh 末尾补 miniupnpd 链跳转时这两条链已就绪。
+        # 整数秒：busybox sleep 不支持小数（见 TestEmbeddedShellScriptsBusyboxSleep）。
+        sleep 5
         # --force 绕节流：固件 start_nat 通常意味着 iptables 刚被 flush，必须真生效。
         log "restart --force start (action=$ACTION)"
         OUT=$("$BINARY" restart --force 2>&1)
