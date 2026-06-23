@@ -303,12 +303,12 @@ const fixtureSubChainMark = `-N sing-box-mark
 
 func chainCmds(extra map[string]cmdResult) map[string]cmdResult {
 	base := map[string]cmdResult{
-		"iptables -t nat -S PREROUTING":          {out: fixturePreroutingNAT, code: 0},
-		"iptables -t mangle -S PREROUTING":       {out: fixturePreroutingMangle, code: 0},
-		"iptables -t filter -S FORWARD":          {out: fixtureForward, code: 0},
-		"iptables -t nat -S sing-box":            {out: fixtureSubChainNAT, code: 0},
-		"iptables -t nat -S sing-box-dns":        {out: fixtureSubChainDNS, code: 0},
-		"iptables -t mangle -S sing-box-mark":    {out: fixtureSubChainMark, code: 0},
+		"iptables -t nat -S PREROUTING":       {out: fixturePreroutingNAT, code: 0},
+		"iptables -t mangle -S PREROUTING":    {out: fixturePreroutingMangle, code: 0},
+		"iptables -t filter -S FORWARD":       {out: fixtureForward, code: 0},
+		"iptables -t nat -S sing-box":         {out: fixtureSubChainNAT, code: 0},
+		"iptables -t nat -S sing-box-dns":     {out: fixtureSubChainDNS, code: 0},
+		"iptables -t mangle -S sing-box-mark": {out: fixtureSubChainMark, code: 0},
 	}
 	maps.Copy(base, extra)
 	return base
@@ -583,5 +583,76 @@ func TestCheckRejectFallbacks_Ip6Unavailable(t *testing.T) {
 	// v4 部分仍应该通过
 	if n := countStatus(checks, "fail"); n > 0 {
 		t.Fatalf("unexpected fails: %+v", checks)
+	}
+}
+
+// ----------------------- checkUPnPJumps -----------------------
+
+const fixtureVUPNPChain = `-N VUPNP
+-A VUPNP -d 192.168.50.20/32 -p tcp -m tcp --dport 6881 -j ACCEPT
+`
+
+const fixtureFUPNPChain = `-N FUPNP
+-A FUPNP -d 192.168.50.20/32 -p tcp -m tcp --dport 6881 -j ACCEPT
+`
+
+// 链不存在（用户未启用 UPnP）→ startup 跳过补跳转，doctor 同样不产出任何检查项。
+func TestCheckUPnPJumps_ChainAbsentSilent(t *testing.T) {
+	stubRunReadOnly(t, map[string]cmdResult{
+		"iptables -t nat -S VUPNP":    {out: "", code: 1, err: fmt.Errorf("No chain/target/match by that name.")},
+		"iptables -t filter -S FUPNP": {out: "", code: 1, err: fmt.Errorf("No chain/target/match by that name.")},
+	})
+	checks := checkUPnPJumps()
+	if len(checks) != 0 {
+		t.Fatalf("expected no checks when UPnP chains absent, got %+v", checks)
+	}
+}
+
+// 链存在且父链已有跳转 → 两条 pass。
+func TestCheckUPnPJumps_BothPresentPass(t *testing.T) {
+	stubRunReadOnly(t, map[string]cmdResult{
+		"iptables -t nat -S VUPNP":      {out: fixtureVUPNPChain, code: 0},
+		"iptables -t filter -S FUPNP":   {out: fixtureFUPNPChain, code: 0},
+		"iptables -t nat -S PREROUTING": {out: "-P PREROUTING ACCEPT\n-A PREROUTING -j VUPNP\n", code: 0},
+		"iptables -t filter -S FORWARD": {out: "-P FORWARD ACCEPT\n-A FORWARD -j FUPNP\n", code: 0},
+	})
+	checks := checkUPnPJumps()
+	if n := countStatus(checks, "pass"); n != 2 {
+		t.Fatalf("expected 2 pass rows, got %d: %+v", n, checks)
+	}
+	if n := countStatus(checks, "warn"); n > 0 {
+		t.Fatalf("unexpected warns: %+v", checks)
+	}
+}
+
+// 链存在但父链缺跳转 → warn（功能降级，非 fail）。
+func TestCheckUPnPJumps_ChainExistsButJumpMissingWarns(t *testing.T) {
+	stubRunReadOnly(t, map[string]cmdResult{
+		"iptables -t nat -S VUPNP":      {out: fixtureVUPNPChain, code: 0},
+		"iptables -t filter -S FUPNP":   {out: fixtureFUPNPChain, code: 0},
+		"iptables -t nat -S PREROUTING": {out: "-P PREROUTING ACCEPT\n", code: 0},
+		"iptables -t filter -S FORWARD": {out: "-P FORWARD ACCEPT\n", code: 0},
+	})
+	checks := checkUPnPJumps()
+	if n := countStatus(checks, "warn"); n != 2 {
+		t.Fatalf("expected 2 warn rows for missing jumps, got %d: %+v", n, checks)
+	}
+	if countStatus(checks, "fail") > 0 {
+		t.Fatalf("missing UPnP jump must be warn, not fail: %+v", checks)
+	}
+	if findCheck(checks, "iptables nat/PREROUTING -j VUPNP") == nil {
+		t.Fatalf("expected VUPNP jump check, got %+v", checks)
+	}
+}
+
+// iptables 完全不可用 → 每条目一条 warn，不 panic。
+func TestCheckUPnPJumps_IptablesUnavailable(t *testing.T) {
+	stubRunReadOnly(t, map[string]cmdResult{
+		"iptables -t nat -S VUPNP":    {out: "", code: -1, err: fmt.Errorf("exec: not found")},
+		"iptables -t filter -S FUPNP": {out: "", code: -1, err: fmt.Errorf("exec: not found")},
+	})
+	checks := checkUPnPJumps()
+	if n := countStatus(checks, "warn"); n != 2 {
+		t.Fatalf("expected 2 warn rows when iptables unavailable, got %d: %+v", n, checks)
 	}
 }

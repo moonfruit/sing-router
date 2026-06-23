@@ -386,6 +386,7 @@ func checkRouting(r config.Routing) []doctorCheck {
 	out = append(out, checkIPRoute(r)...)
 	out = append(out, checkIptablesChains(r)...)
 	out = append(out, checkRejectFallbacks(r)...)
+	out = append(out, checkUPnPJumps()...)
 	return out
 }
 
@@ -735,6 +736,7 @@ type rejectExpect struct {
 //   - v6 × INPUT × 53：防"以路由器为 DNS"的 v6 查询泄漏（无需 -i）
 //   - v6 × FORWARD × 53：防 LAN 客户端绕过到公网 v6 DNS（-i LanIface 收窄）
 //   - v4+v6 × FORWARD × 853：防 DoT(tcp)/DoQ-DTLS(udp) 绕过劫持（-i LanIface 收窄）
+//
 // 注：
 //   - IPv4 53 不在此列——它走 nat/PREROUTING REDIRECT 到 sing-box-dns，
 //     由 checkIptablesChains 的 expectedJumps 覆盖。
@@ -842,6 +844,90 @@ func checkRejectFallbacks(r config.Routing) []doctorCheck {
 				})
 			}
 		}
+	}
+	return checks
+}
+
+// upnpJump 描述 startup.sh 2.6 节补回的一条 miniupnpd 链跳转：当自定义链
+// Chain（VUPNP/FUPNP）在 Table 中已存在时，父链 Parent 上应有一条 `-j Chain`。
+type upnpJump struct {
+	Table  string // VUPNP 落在 nat；FUPNP 落在 filter（即 iptables 默认表）
+	Parent string // 父链：nat/PREROUTING 或 filter/FORWARD
+	Chain  string // miniupnpd 自定义链名 VUPNP / FUPNP
+	Reason string // 缺失时的诊断提示
+}
+
+// expectedUPnPJumps 与 assets/shell/startup.sh 2.6 节一一对应。
+// 链名 VUPNP / FUPNP 为华硕 miniupnpd 约定（见 /etc/upnp/config 的
+// upnp_nat_chain / upnp_forward_chain）。两条链归 miniupnpd 而非 sing-router，
+// startup 只补跳转、teardown 不拆，doctor 同样只读巡检。
+func expectedUPnPJumps() []upnpJump {
+	return []upnpJump{
+		{"nat", "PREROUTING", "VUPNP", "UPnP/NAT-PMP/PCP inbound port maps silently fail without this jump"},
+		{"filter", "FORWARD", "FUPNP", "UPnP-forwarded inbound traffic is dropped without this jump"},
+	}
+}
+
+// checkUPnPJumps 巡检 startup.sh 2.6 节补回的 miniupnpd 链跳转。
+//
+// 启用条件与 startup 完全一致：startup 用 `iptables -nL <Chain>` 探测自定义链
+// 是否存在，只有存在（= miniupnpd 已起且用户启用了 UPnP）才幂等补跳转；链
+// 不存在（用户关了 UPnP）则跳过、不创建空链。doctor 照此处理——链不存在时
+// 整条检查不产出任何结果，避免对没用 UPnP 的用户刷无关噪声。
+//
+// 链存在却缺跳转 → warn 而非 fail：这两条链与 sing-router 透明代理无关，缺
+// 跳转只会让 UPnP 入站端口映射失效（对称 NAT 的 P2P 应用退回 DERP/relay
+// 中转），属功能降级，不影响代理本身。
+func checkUPnPJumps() []doctorCheck {
+	var checks []doctorCheck
+	for _, j := range expectedUPnPJumps() {
+		label := "iptables " + j.Table + "/" + j.Parent + " -j " + j.Chain
+
+		// 前置条件：自定义链是否存在。不存在即 startup 也会跳过的场景，不产出。
+		_, code, err := runCmd("iptables", "-t", j.Table, "-S", j.Chain)
+		if code == -1 {
+			checks = append(checks, doctorCheck{Name: label, Status: "warn", Detail: "iptables unavailable: " + err.Error()})
+			continue
+		}
+		if code != 0 {
+			continue // 链不存在 = UPnP 未启用，startup 同样跳过补跳转。
+		}
+
+		// 链存在 → 父链必须引用它（startup 会幂等补上）。
+		out, code, err := runCmd("iptables", "-t", j.Table, "-S", j.Parent)
+		if code == -1 {
+			checks = append(checks, doctorCheck{Name: label, Status: "warn", Detail: "iptables unavailable: " + err.Error()})
+			continue
+		}
+		if code != 0 {
+			checks = append(checks, doctorCheck{
+				Name:   label,
+				Status: "warn",
+				Detail: fmt.Sprintf("iptables -t %s -S %s exit %d", j.Table, j.Parent, code),
+			})
+			continue
+		}
+		var found *iptRule
+		rules := parseIptablesS(out)
+		for i := range rules {
+			if rules[i].Target == j.Chain {
+				found = &rules[i]
+				break
+			}
+		}
+		if found == nil {
+			checks = append(checks, doctorCheck{
+				Name:   label,
+				Status: "warn",
+				Detail: j.Chain + " chain exists but no jump from " + j.Parent + " — " + j.Reason,
+			})
+			continue
+		}
+		checks = append(checks, doctorCheck{
+			Name:   label,
+			Status: "pass",
+			Detail: fmt.Sprintf("line %d", found.Index),
+		})
 	}
 	return checks
 }
