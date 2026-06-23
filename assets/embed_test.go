@@ -10,6 +10,7 @@ func TestDefaultConfigsPresent(t *testing.T) {
 	for _, p := range []string{
 		"config.d/clash.json",
 		"config.d/dns.json",
+		"config.d/hosts",
 		"config.d/inbounds.json",
 		"config.d/log.json",
 		"config.d/cache.json",
@@ -64,6 +65,34 @@ func TestDNSFakeIPRangeFixed(t *testing.T) {
 	}
 	if strings.Contains(string(data), `"22.0.0.0/8"`) {
 		t.Fatal("default dns.json still references obsolete 22.0.0.0/8")
+	}
+}
+
+// TestDNSHostsExternalized 守护：dns-hosts 必须从外置 config.d/hosts 文件读取
+// （install 会把它落到 $RUNDIR/config.d/hosts），且不再内联 predefined 映射。
+func TestDNSHostsExternalized(t *testing.T) {
+	data, err := ReadFile("config.d/dns.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(data)
+	if !strings.Contains(s, `"config.d/hosts"`) {
+		t.Fatal("default dns.json should reference external hosts file config.d/hosts")
+	}
+	// 注意：route 规则里的 "action": "predefined" 是另一回事，这里只盯内联 hosts 映射键。
+	if strings.Contains(s, `"predefined": {`) || strings.Contains(s, `"predefined":{`) {
+		t.Fatal("default dns.json still inlines predefined hosts map; should use external config.d/hosts")
+	}
+	if strings.Contains(s, "home.arpa") {
+		t.Fatal("default dns.json still inlines home.arpa entries; should live in config.d/hosts")
+	}
+	// 外置文件本身必须存在且非空。
+	hosts, err := ReadFile("config.d/hosts")
+	if err != nil {
+		t.Fatalf("missing config.d/hosts: %v", err)
+	}
+	if len(strings.TrimSpace(string(hosts))) == 0 {
+		t.Fatal("config.d/hosts is empty")
 	}
 }
 

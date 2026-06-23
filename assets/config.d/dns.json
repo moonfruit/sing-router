@@ -13,16 +13,7 @@
       {
         "tag": "dns-hosts",
         "type": "hosts",
-        "path": "/etc/hosts",
-        "predefined": {
-          "router.home.arpa": "192.168.50.1",
-          "xiaomi.home.arpa": "192.168.50.10",
-          "lazycat.home.arpa": "192.168.50.11",
-          "haos.home.arpa": "192.168.50.15",
-          "debian.home.arpa": "192.168.50.250",
-          "switch1.home.arpa": "192.168.50.251",
-          "switch2.home.arpa": "192.168.50.252"
-        }
+        "path": ["config.d/hosts", "/etc/hosts"]
       },
       // FakeIP
       { "tag": "dns-fakeip", "type": "fakeip", "inet4_range": "28.0.0.0/8" }

@@ -50,6 +50,7 @@ func SeedDefaults(rundir string, vars TemplateVars) error {
 	plainFiles := map[string]string{
 		"config.d/clash.json":       "config.d/clash.json",
 		"config.d/dns.json":         "config.d/dns.json",
+		"config.d/hosts":            "config.d/hosts",
 		"config.d/inbounds.json":    "config.d/inbounds.json",
 		"config.d/log.json":         "config.d/log.json",
 		"config.d/cache.json":       "config.d/cache.json",
