@@ -62,7 +62,8 @@ docs/superpowers/{specs,plans}/  # 设计稿与实施计划（按阶段 module-a
        │     └─ Shutdown / Startup / Restart 三段式（详见「重启路径统一」段）；
        │        Ready check：TCP dial 127.0.0.1:7890 (mixed-in) + clash API /version；
        │        子进程崩溃 → 立即 Shutdown 拆 iptables → 退避（BackoffMs ladder）→ Startup
-       └─ SyncLoop (interval>0 时): updater.UpdateAll → applier.ApplyAll（auto_apply=true）
+       └─ SyncLoop (interval>0 时): updater.UpdateAll → applier.ApplyAll（auto_apply=true）；
+          每轮末尾另调 zashboard.Generate 本地生成 ui/zashboard.json（独立步骤，不进 Applier）
 ```
 
 固件钩子（install 触发，按 firmware 类型分支）：
@@ -125,6 +126,8 @@ sha256 真变化闸门保留（"是否触发 Restart"的判断）：gitee 上游
 **`[log].level` 与 `[seq].level` 是两条独立阈值**：前者控本地 log 文件（`internal/log/Writer` 订阅时按 `LevelAtLeast` 过滤），后者控 seq sink（订阅时同样按 `LevelAtLeast` 过滤）。`wireup_daemon.go` 把 emitter 入口 floor 自动设成 `min(logLevel, seqLevel if attached)`，低于 floor 的 `em.Debug(...)` 直接 no-op 不进 bus；sing-box stderr 经 `PublishExternal` 不走 emitter floor 但仍被两条出口各自 MatchFn 过滤。所以 `[log].level="warn"` + `[seq].level="info"` 这种"本地少噪、远程详细"的组合是支持的。
 
 `internal/log/EmitterStack.Close(ctx)` 的顺序合约：先 unsubscribe writer 与 extras → 并行调每个 extra 的 closeFn（如 seq.Sink 的 drain 包装，受 `[seq].close_drain_timeout_seconds` 总预算约束，默认 10s）→ Bus.Close（drain 给 writer）→ Writer.Close。**改这条顺序前先看 `internal/log/wireup.go` 的注释**——它保证 sink drain 期间的诊断事件仍能落本地 log。`EmitterStack.Close` 是幂等的，daemon 主路径用 defer 调一次即可。
+
+`[zashboard].static_labels` 控制 `ui/zashboard.json`（zashboard web 可导入的 source-ip-label-list）的本地生成。daemon 采集四类数据源：nvram `custom_clientlist`（路由器静态绑定）、`/proc/net/arp`（IPv4 邻居）、dnsmasq.leases（DHCP 租约）、`ip -6 neigh`（IPv6 邻居），与 `[zashboard.static_labels]` 静态表合并（路由器采集数据优先）。`ui_dir` 存在即生成，每轮 sync 末尾触发（独立步骤，不经 Applier、不触发 sing-box restart）；CLI `update zashboard` / `update all` 手动触发同一逻辑。无独立 enable flag，静态标签表为空时仍会生成（仅动态采集结果）。
 
 ## 测试与质量门
 

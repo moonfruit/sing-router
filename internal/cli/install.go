@@ -92,12 +92,11 @@ func newInstallCmd() *cobra.Command {
 				return err
 			}
 			vars := install.TemplateVars{
-				DownloadSingBox:   downloadSingBox,
-				DownloadCNList:    downloadCNList,
-				DownloadZashboard: cfg.Install.DownloadZashboard,
-				AutoStart:         autoStart,
-				Firmware:          string(kind),
-				GiteeToken:        giteeToken,
+				DownloadSingBox: downloadSingBox,
+				DownloadCNList:  downloadCNList,
+				AutoStart:       autoStart,
+				Firmware:        string(kind),
+				GiteeToken:      giteeToken,
 			}
 			if err := run("seed default config.d/* and render daemon.toml", func() error {
 				return install.SeedDefaults(rundir, vars)

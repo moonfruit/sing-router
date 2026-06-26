@@ -7,6 +7,7 @@ import (
 	"github.com/moonfruit/sing2seq/clef"
 
 	syncpkg "github.com/moonfruit/sing-router/internal/sync"
+	"github.com/moonfruit/sing-router/internal/zashboard"
 )
 
 // SyncLoopConfig 控制后台资源同步行为。intervalSec=0 时 StartSyncLoop 不启动 goroutine。
@@ -14,6 +15,9 @@ type SyncLoopConfig struct {
 	IntervalSec     int
 	OnStartDelaySec int
 	AutoApply       bool // true:拉到新资源后自动 apply(zoo/sing-box → restart;cn.txt → ipset reload);false:仅 log
+	// ZashboardUIDir 非空时,每轮 sync 末尾本地生成 <UIDir>/zashboard.json(独立步骤,不进 Applier)。
+	ZashboardUIDir        string
+	ZashboardStaticLabels map[string]string
 }
 
 // StartSyncLoop 在后台周期性调用 updater.UpdateAll(ctx)。
@@ -48,7 +52,7 @@ func StartSyncLoop(ctx context.Context, updater *syncpkg.Updater, cfg SyncLoopCo
 			case <-time.After(time.Duration(cfg.OnStartDelaySec) * time.Second):
 			}
 		}
-		runSyncOnce(ctx, updater, em, applier, cfg.AutoApply)
+		runSyncOnce(ctx, updater, em, applier, cfg)
 		ticker := time.NewTicker(time.Duration(cfg.IntervalSec) * time.Second)
 		defer ticker.Stop()
 		for {
@@ -57,13 +61,15 @@ func StartSyncLoop(ctx context.Context, updater *syncpkg.Updater, cfg SyncLoopCo
 				em.Info("sync", "sync.loop.stopped", "background sync stopped", nil)
 				return
 			case <-ticker.C:
-				runSyncOnce(ctx, updater, em, applier, cfg.AutoApply)
+				runSyncOnce(ctx, updater, em, applier, cfg)
 			}
 		}
 	}()
 }
 
-func runSyncOnce(ctx context.Context, u *syncpkg.Updater, em *clef.Emitter, applier *Applier, autoApply bool) {
+func runSyncOnce(ctx context.Context, u *syncpkg.Updater, em *clef.Emitter, applier *Applier, cfg SyncLoopConfig) {
+	defer generateZashboard(ctx, em, cfg)
+	autoApply := cfg.AutoApply
 	r := u.UpdateAll(ctx)
 	logItem(em, "sing-box", r.SingBox.Changed, r.SingBox.Version, r.SingBox.Err)
 	logItem(em, "cn.txt", r.CNList.Changed, "", r.CNList.Err)
@@ -102,6 +108,30 @@ func runSyncOnce(ctx context.Context, u *syncpkg.Updater, em *clef.Emitter, appl
 		em.Warn("apply", "apply.failed",
 			"apply resources {Kinds}: {Err}",
 			map[string]any{"Kinds": kinds, "Err": err.Error()})
+	}
+}
+
+// generateZashboard 本地生成 ui/zashboard.json(source-ip-label-list)。
+// 独立于资源 apply:不进 Applier、不触发 restart。ui_dir 不存在则静默跳过。
+func generateZashboard(ctx context.Context, em *clef.Emitter, cfg SyncLoopConfig) {
+	if cfg.ZashboardUIDir == "" {
+		return
+	}
+	res, err := zashboard.Generate(ctx, cfg.ZashboardUIDir, cfg.ZashboardStaticLabels)
+	for _, w := range res.Warnings {
+		em.Debug("zashboard", "zashboard.collect.degraded", "{Warn}", map[string]any{"Warn": w})
+	}
+	switch {
+	case err != nil:
+		em.Warn("zashboard", "zashboard.generate.failed", "zashboard generate failed: {Err}",
+			map[string]any{"Err": err.Error()})
+	case res.Skipped:
+		em.Debug("zashboard", "zashboard.generate.skipped", "ui_dir absent; zashboard generation skipped", nil)
+	case res.Changed:
+		em.Info("zashboard", "zashboard.generate.updated", "zashboard.json updated ({Count} entries)",
+			map[string]any{"Count": res.Count})
+	default:
+		em.Debug("zashboard", "zashboard.generate.unchanged", "zashboard.json unchanged", nil)
 	}
 }
 

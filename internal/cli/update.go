@@ -11,6 +11,7 @@ import (
 
 	"github.com/moonfruit/sing-router/internal/config"
 	syncpkg "github.com/moonfruit/sing-router/internal/sync"
+	"github.com/moonfruit/sing-router/internal/zashboard"
 )
 
 // newUpdateCmd 提供 `sing-router update [sing-box|cn|zoo|all] [--apply]`:
@@ -25,8 +26,8 @@ func newUpdateCmd() *cobra.Command {
 	var rundir string
 	var apply bool
 	cmd := &cobra.Command{
-		Use:   "update [sing-box|cn|zoo|all]",
-		Short: "Pull latest sing-box / cn.txt / zoo.json from gitee (and public CDN for cn.txt)",
+		Use:   "update [sing-box|cn|zoo|zashboard|all]",
+		Short: "Pull latest sing-box / cn.txt / zoo.json from gitee; locally regenerate ui/zashboard.json",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			target := "all"
@@ -79,11 +80,24 @@ func newUpdateCmd() *cobra.Command {
 					return err
 				}
 				anyChanged = changed
+			case "zashboard":
+				res, err := zashboard.Generate(ctx, filepath.Join(rundir, cfg.Runtime.UIDir), cfg.Zashboard.StaticLabels)
+				if err != nil {
+					return fmt.Errorf("generate zashboard: %w", err)
+				}
+				printZashboard(out, res)
+				return nil
 			case "all":
 				r := u.UpdateAll(ctx)
 				printItem(out, "sing-box", r.SingBox.Changed, r.SingBox.Version, r.SingBox.Err)
 				printItem(out, "cn.txt", r.CNList.Changed, "", r.CNList.Err)
 				printItem(out, "zoo.json", r.Zoo.Changed, "", r.Zoo.Err)
+				zres, zerr := zashboard.Generate(ctx, filepath.Join(rundir, cfg.Runtime.UIDir), cfg.Zashboard.StaticLabels)
+				if zerr != nil {
+					printItem(out, "zashboard", false, "", zerr)
+				} else {
+					printZashboard(out, zres)
+				}
 				if r.HasError() {
 					return fmt.Errorf("one or more resources failed to update")
 				}
@@ -95,7 +109,7 @@ func newUpdateCmd() *cobra.Command {
 				}
 				anyChanged = r.SingBox.Changed || r.CNList.Changed || r.Zoo.Changed
 			default:
-				return fmt.Errorf("unknown target %q (want sing-box | cn | zoo | all)", target)
+				return fmt.Errorf("unknown target %q (want sing-box | cn | zoo | zashboard | all)", target)
 			}
 
 			if !apply {
@@ -141,5 +155,22 @@ func printItem(out interface {
 		fmt.Fprintf(out, "✓ %-10s  %s  (version %s)\n", name, status, version)
 	} else {
 		fmt.Fprintf(out, "✓ %-10s  %s\n", name, status)
+	}
+}
+
+func printZashboard(out interface {
+	Write([]byte) (int, error)
+}, res zashboard.Result,
+) {
+	for _, w := range res.Warnings {
+		fmt.Fprintf(out, "⚠ %-10s  %s\n", "zashboard", w)
+	}
+	switch {
+	case res.Skipped:
+		fmt.Fprintf(out, "ℹ %-10s  skipped (ui_dir absent)\n", "zashboard")
+	case res.Changed:
+		fmt.Fprintf(out, "✓ %-10s  updated  (%d entries)\n", "zashboard", res.Count)
+	default:
+		fmt.Fprintf(out, "✓ %-10s  unchanged  (%d entries)\n", "zashboard", res.Count)
 	}
 }

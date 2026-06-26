@@ -37,6 +37,7 @@ type DaemonConfig struct {
 	Notify     NotifyConfig     `toml:"notify"`
 	Router     RouterConfig     `toml:"router"`
 	Install    InstallConfig    `toml:"install"`
+	Zashboard  ZashboardConfig  `toml:"zashboard"`
 }
 
 type RuntimeConfig struct {
@@ -198,11 +199,16 @@ type RouterConfig struct {
 }
 
 type InstallConfig struct {
-	DownloadSingBox   bool   `toml:"download_sing_box"`
-	DownloadCNList    bool   `toml:"download_cn_list"`
-	DownloadZashboard bool   `toml:"download_zashboard"`
-	AutoStart         bool   `toml:"auto_start"`
-	Firmware          string `toml:"firmware"` // "koolshare" | "merlin" | ""
+	DownloadSingBox bool   `toml:"download_sing_box"`
+	DownloadCNList  bool   `toml:"download_cn_list"`
+	AutoStart       bool   `toml:"auto_start"`
+	Firmware        string `toml:"firmware"` // "koolshare" | "merlin" | ""
+}
+
+// ZashboardConfig 控制 ui/zashboard.json（source-ip-label-list）生成。
+// StaticLabels 为补充路由器客户端列表里没有的基础设施项；冲突时路由器数据优先。
+type ZashboardConfig struct {
+	StaticLabels map[string]string `toml:"static_labels"`
 }
 
 // LoadDaemonConfig 从给定路径加载 daemon.toml。文件不存在时返回全默认 config，
@@ -286,10 +292,9 @@ func defaultConfig() *DaemonConfig {
 		},
 		Sync: SyncConfig{}, // applyDefaults 填补
 		Install: InstallConfig{
-			DownloadSingBox:   false,
-			DownloadCNList:    false,
-			DownloadZashboard: false,
-			AutoStart:         false,
+			DownloadSingBox: false,
+			DownloadCNList:  false,
+			AutoStart:       false,
 		},
 	}
 	return cfg
