@@ -14,12 +14,11 @@ import (
 // TemplateVars 是首次渲染 daemon.toml 时由 install 命令注入的变量集合。
 // 当前覆盖 [install] / [gitee] 节，其他节如未来需要按参数定制再扩展即可。
 type TemplateVars struct {
-	DownloadSingBox   bool
-	DownloadCNList    bool
-	DownloadZashboard bool
-	AutoStart         bool
-	Firmware          string // "koolshare" | "merlin"
-	GiteeToken        string // [gitee].token；空字符串 → 渲染为 token = ""，与历史行为一致
+	DownloadSingBox bool
+	DownloadCNList  bool
+	AutoStart       bool
+	Firmware        string // "koolshare" | "merlin"
+	GiteeToken      string // [gitee].token；空字符串 → 渲染为 token = ""，与历史行为一致
 }
 
 // followBinarySeeds 是"跟随二进制刷新"的路径集——每对 src(embed) → dst(rundir)。

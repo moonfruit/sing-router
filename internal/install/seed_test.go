@@ -17,11 +17,10 @@ func TestSeedWritesDefaultsWhenMissing(t *testing.T) {
 		t.Fatal(err)
 	}
 	vars := TemplateVars{
-		DownloadSingBox:   true,
-		DownloadCNList:    false,
-		DownloadZashboard: false,
-		AutoStart:         true,
-		Firmware:          "koolshare",
+		DownloadSingBox: true,
+		DownloadCNList:  false,
+		AutoStart:       true,
+		Firmware:        "koolshare",
 	}
 	if err := SeedDefaults(dir, vars); err != nil {
 		t.Fatal(err)
@@ -60,11 +59,10 @@ func TestSeedRendersTemplateVars(t *testing.T) {
 		t.Fatal(err)
 	}
 	vars := TemplateVars{
-		DownloadSingBox:   true,
-		DownloadCNList:    false,
-		DownloadZashboard: false,
-		AutoStart:         true,
-		Firmware:          "koolshare",
+		DownloadSingBox: true,
+		DownloadCNList:  false,
+		AutoStart:       true,
+		Firmware:        "koolshare",
 	}
 	if err := SeedDefaults(dir, vars); err != nil {
 		t.Fatal(err)

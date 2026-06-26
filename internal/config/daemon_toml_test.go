@@ -36,8 +36,10 @@ http_retries           = 3
 [install]
 download_sing_box  = true
 download_cn_list   = true
-download_zashboard = false
 auto_start         = false
+
+[zashboard.static_labels]
+"127.0.0.1" = "💻本机"
 `
 
 func TestLoadDaemonConfig(t *testing.T) {
@@ -70,6 +72,9 @@ func TestLoadDaemonConfig(t *testing.T) {
 	}
 	if cfg.Install.DownloadSingBox != true {
 		t.Fatal("Install.DownloadSingBox mismatch")
+	}
+	if got := cfg.Zashboard.StaticLabels["127.0.0.1"]; got != "💻本机" {
+		t.Fatalf("Zashboard.StaticLabels[127.0.0.1]=%q want 💻本机", got)
 	}
 }
 

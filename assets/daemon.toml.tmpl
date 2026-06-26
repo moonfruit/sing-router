@@ -157,6 +157,16 @@ on_start_delay_sec = 300
 # 本节在首次 install 时由命令行参数（或探测结果）渲染；之后由用户维护。
 download_sing_box   = {{ .DownloadSingBox }}
 download_cn_list    = {{ .DownloadCNList }}
-download_zashboard  = {{ .DownloadZashboard }}
 auto_start          = {{ .AutoStart }}
 firmware            = "{{ .Firmware }}"
+
+[zashboard]
+# ui/zashboard.json（zashboard web 可导入的 source-ip-label-list）生成所用的静态标签表。
+# ui_dir 存在即每轮 sync 生成；路由器 custom_clientlist 数据优先，下表只补缺失的 key。
+[zashboard.static_labels]
+"127.0.0.1"         = "💻本机"
+"11.0.0.1"          = "🌐TUN"
+"fdfe:dcba:9876::1" = "🌐TUN"
+"192.168.50.1"      = "🛜主路由器"
+"192.168.50.2"      = "🛜副路由器"
+"192.168.50.3"      = "🛜小路由器"
