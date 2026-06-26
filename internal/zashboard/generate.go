@@ -64,6 +64,8 @@ func marshalNoEscape(v any, indent string) ([]byte, error) {
 	if err := enc.Encode(v); err != nil {
 		return nil, err
 	}
+	// 去掉 Encoder.Encode 追加的尾换行：与 Python 脚本 print(text) / stdout 路径逐字节一致
+	// （注意 Python 的 -o 文件路径会写 text+"\n"，本实现刻意不带尾换行，勿"修"回去）。
 	return bytes.TrimRight(buf.Bytes(), "\n"), nil
 }
 

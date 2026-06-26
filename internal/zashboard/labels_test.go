@@ -31,6 +31,18 @@ func TestParseARP(t *testing.T) {
 	}
 }
 
+func TestParseARPFirstWins(t *testing.T) {
+	// 同一 MAC 两条有效记录，首条优先（setdefault 语义）
+	in := "IP address       HW type     Flags       HW address            Mask     Device\n" +
+		"192.168.50.10    0x1         0x2         aa:bb:cc:dd:ee:01     *        br0\n" +
+		"192.168.50.99    0x1         0x2         aa:bb:cc:dd:ee:01     *        br0\n"
+	got := parseARP(in)
+	want := map[string]string{"AA:BB:CC:DD:EE:01": "192.168.50.10"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %v want %v", got, want)
+	}
+}
+
 func TestParseLeases(t *testing.T) {
 	// 列: expiry MAC IP hostname clientid；setdefault（首次出现优先）
 	in := "1700000000 aa:bb:cc:dd:ee:01 192.168.50.20 host-a 01:aa\n" +
