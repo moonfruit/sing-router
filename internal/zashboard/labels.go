@@ -6,6 +6,7 @@ package zashboard
 import (
 	"math/big"
 	"net"
+	"slices"
 	"sort"
 	"strings"
 
@@ -104,7 +105,7 @@ func parseIPv6Neigh(text string) map[string][]string {
 			continue
 		}
 		mac := normMAC(cols[idx+1])
-		if !contains(result[mac], addr) {
+		if !slices.Contains(result[mac], addr) {
 			result[mac] = append(result[mac], addr)
 		}
 	}
@@ -114,7 +115,7 @@ func parseIPv6Neigh(text string) map[string][]string {
 // isULA 判断 fc00::/7（Go 的 IsGlobalUnicast 对 ULA 返回 true，需额外排除）。
 func isULA(ip net.IP) bool {
 	v6 := ip.To16()
-	return v6 != nil && ip.To4() == nil && (v6[0]&0xfe) == 0xfc
+	return v6 != nil && (v6[0]&0xfe) == 0xfc
 }
 
 func indexOf(s []string, v string) int {
@@ -124,15 +125,6 @@ func indexOf(s []string, v string) int {
 		}
 	}
 	return -1
-}
-
-func contains(s []string, v string) bool {
-	for _, x := range s {
-		if x == v {
-			return true
-		}
-	}
-	return false
 }
 
 // BuildEntries 合并 4 源 + 静态表 → 排序后的 entries。路由器数据优先，静态表补缺失 key。
