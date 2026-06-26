@@ -92,6 +92,12 @@ func newUpdateCmd() *cobra.Command {
 				printItem(out, "sing-box", r.SingBox.Changed, r.SingBox.Version, r.SingBox.Err)
 				printItem(out, "cn.txt", r.CNList.Changed, "", r.CNList.Err)
 				printItem(out, "zoo.json", r.Zoo.Changed, "", r.Zoo.Err)
+				zres, zerr := zashboard.Generate(ctx, filepath.Join(rundir, cfg.Runtime.UIDir), cfg.Zashboard.StaticLabels)
+				if zerr != nil {
+					printItem(out, "zashboard", false, "", zerr)
+				} else {
+					printZashboard(out, zres)
+				}
 				if r.HasError() {
 					return fmt.Errorf("one or more resources failed to update")
 				}
@@ -100,12 +106,6 @@ func newUpdateCmd() *cobra.Command {
 					if err := u.CommitSingBoxStaging(); err != nil {
 						return fmt.Errorf("commit sing-box staging: %w", err)
 					}
-				}
-				zres, zerr := zashboard.Generate(ctx, filepath.Join(rundir, cfg.Runtime.UIDir), cfg.Zashboard.StaticLabels)
-				if zerr != nil {
-					printItem(out, "zashboard", false, "", zerr)
-				} else {
-					printZashboard(out, zres)
 				}
 				anyChanged = r.SingBox.Changed || r.CNList.Changed || r.Zoo.Changed
 			default:
