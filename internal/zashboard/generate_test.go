@@ -10,7 +10,10 @@ import (
 )
 
 func TestRenderPayloadFormat(t *testing.T) {
-	entries := []Entry{{Key: "127.0.0.1", Label: "💻本机", ID: "id-1"}}
+	entries := []Entry{
+		{Key: "127.0.0.1", Label: "💻本机", ID: "id-1"},
+		{Key: "10.0.0.5", Label: "A<b>&c", ID: "id-2"},
+	}
 	got, err := renderPayload(entries)
 	if err != nil {
 		t.Fatal(err)
@@ -24,9 +27,20 @@ func TestRenderPayloadFormat(t *testing.T) {
 	if !strings.Contains(s, "💻本机") {
 		t.Fatalf("emoji escaped:\n%s", s)
 	}
-	// 内层值是紧凑 JSON 字符串（无空格分隔）
-	if !strings.Contains(s, `[{\"key\":\"127.0.0.1\",\"label\":\"💻本机\",\"id\":\"id-1\"}]`) {
+	// 内层值是紧凑 JSON 字符串（无空格分隔）；检查第一条目的紧凑形式
+	if !strings.Contains(s, `{\"key\":\"127.0.0.1\",\"label\":\"💻本机\",\"id\":\"id-1\"}`) {
 		t.Fatalf("inner not compact:\n%s", s)
+	}
+	// SetEscapeHTML(false): <>& 必须原样，不得转义为 < / > / &
+	if !strings.Contains(s, "A<b>&c") {
+		t.Fatalf("HTML chars escaped:\n%s", s)
+	}
+	if strings.Contains(s, `\u003c`) || strings.Contains(s, `\u003e`) || strings.Contains(s, `\u0026`) {
+		t.Fatalf("HTML escaping not disabled:\n%s", s)
+	}
+	// 尾换行必须被去掉
+	if strings.HasSuffix(s, "\n") {
+		t.Fatalf("trailing newline not trimmed:\n%q", s)
 	}
 	// 可被解析回来：外层 map 取值再解析内层数组
 	var outer map[string]string
@@ -37,7 +51,7 @@ func TestRenderPayloadFormat(t *testing.T) {
 	if err := json.Unmarshal([]byte(outer["config/source-ip-label-list"]), &back); err != nil {
 		t.Fatalf("inner parse: %v", err)
 	}
-	if len(back) != 1 || back[0].Key != "127.0.0.1" {
+	if len(back) != 2 || back[0].Key != "127.0.0.1" {
 		t.Fatalf("roundtrip mismatch: %#v", back)
 	}
 }

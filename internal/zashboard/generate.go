@@ -78,6 +78,7 @@ func writeIfChanged(path string, content []byte) (bool, error) {
 	if err := os.WriteFile(tmp, content, 0o644); err != nil {
 		return false, err
 	}
+	defer os.Remove(tmp)
 	if err := os.Rename(tmp, path); err != nil {
 		return false, err
 	}

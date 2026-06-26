@@ -72,12 +72,12 @@ func TestBuildEntriesMergeAndSort(t *testing.T) {
 	raw := RawData{
 		Clients: "<💻笔记本>AA:BB:CC:DD:EE:01>0>",
 		Leases:  "1700000000 aa:bb:cc:dd:ee:01 192.168.50.20 host-a 01:aa\n",
-		ARP:     "IP address HW type Flags HW address Mask Device\n" +
+		ARP: "IP address HW type Flags HW address Mask Device\n" +
 			"192.168.50.10 0x1 0x2 aa:bb:cc:dd:ee:01 * br0\n",
 		Neigh: "2408:1:2:3::1 dev br0 lladdr aa:bb:cc:dd:ee:01 REACHABLE\n",
 	}
 	static := map[string]string{
-		"127.0.0.1":    "💻本机",
+		"127.0.0.1":     "💻本机",
 		"192.168.50.10": "应被路由器数据覆盖",
 	}
 	got := BuildEntries(raw, static)
