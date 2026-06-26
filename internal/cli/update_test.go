@@ -2,10 +2,13 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/moonfruit/sing-router/internal/zashboard"
 )
 
 func TestUpdate_UnknownTargetFails(t *testing.T) {
@@ -41,6 +44,21 @@ func TestUpdate_MissingTokenFails(t *testing.T) {
 	err := cmd.Execute()
 	if err == nil || !strings.Contains(err.Error(), "gitee.token is empty") {
 		t.Fatalf("expected token error, got %v", err)
+	}
+}
+
+func TestRunZashboardUpdateWritesFile(t *testing.T) {
+	ui := t.TempDir()
+	res, err := zashboard.Generate(context.Background(), ui,
+		map[string]string{"127.0.0.1": "💻本机"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Changed || res.Count != 1 {
+		t.Fatalf("unexpected %#v", res)
+	}
+	if _, err := os.Stat(filepath.Join(ui, "zashboard.json")); err != nil {
+		t.Fatalf("not written: %v", err)
 	}
 }
 
