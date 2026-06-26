@@ -15,6 +15,20 @@ import (
 	syncpkg "github.com/moonfruit/sing-router/internal/sync"
 )
 
+func TestRunSyncOnceGeneratesZashboard(t *testing.T) {
+	ui := t.TempDir()
+	em := newTestEmitter(t)
+	cfg := SyncLoopConfig{
+		ZashboardUIDir:        ui,
+		ZashboardStaticLabels: map[string]string{"127.0.0.1": "💻本机"},
+	}
+	generateZashboard(context.Background(), em, cfg)
+
+	if _, err := os.Stat(filepath.Join(ui, "zashboard.json")); err != nil {
+		t.Fatalf("zashboard.json not generated: %v", err)
+	}
+}
+
 // TestStartSyncLoop_DisabledWhenIntervalZero — IntervalSec=0 时立刻返回，不启动 goroutine。
 func TestStartSyncLoop_DisabledWhenIntervalZero(t *testing.T) {
 	rundir := t.TempDir()
