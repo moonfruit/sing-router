@@ -24,6 +24,7 @@ type RuleSetSource struct {
 var DefaultRequiredRuleSets = []RuleSetSource{
 	{Tag: "GeoIP@CN", GiteePath: "rules/geoip-cn.srs", LocalRelPath: "var/rules/geoip-cn.srs"},
 	{Tag: "GeoSites@CN", GiteePath: "rules/geosites-cn.srs", LocalRelPath: "var/rules/geosites-cn.srs"},
+	{Tag: "DoH", GiteePath: "rules/doh.srs", LocalRelPath: "var/rules/doh.srs"},
 	{Tag: "Lan", GiteePath: "rules/lan.srs", LocalRelPath: "var/rules/lan.srs"},
 	{Tag: "FakeIpBypass", GiteePath: "rules/fakeip-bypass.srs", LocalRelPath: "var/rules/fakeip-bypass.srs"},
 }

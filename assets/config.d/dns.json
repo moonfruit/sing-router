@@ -50,17 +50,30 @@
   },
   "route": {
     "rules": [
-      { "network": "icmp", "outbound": "DIRECT" },
-      { "action": "sniff" },
-      { "protocol": "dns", "action": "hijack-dns" },
-      { "protocol": ["bittorrent", "ntp", "stun"], "outbound": "DIRECT" },
       // 防自连回环
       {
         "source_ip_cidr": ["127.0.0.0/8", "::1/128", "192.168.50.1/32"],
         "inbound": ["dns-in", "redirect-in", "tproxy-in", "tun-in"],
         "action": "reject"
       },
+      { "inbound": "dns-in", "action": "hijack-dns" },
+      { "network": "icmp", "outbound": "DIRECT" },
       { "ip_is_private": true, "outbound": "DIRECT" },
+      // 禁用 DoT/DoQ
+      { "port": 853, "action": "reject" },
+      { "action": "sniff" },
+      { "protocol": "dns", "action": "hijack-dns" },
+      // 禁用 DoH
+      {
+        "type": "logical",
+        "mode": "and",
+        "rules": [
+          { "rule_set": "GeoSites@CN", "invert": true },
+          { "protocol": ["http", "tls", "quic"], "rule_set": "DoH" }
+        ],
+        "action": "reject"
+      },
+      { "protocol": ["bittorrent", "ntp", "stun"], "outbound": "DIRECT" },
       { "action": "sniff-override-destination" }
     ],
     "auto_detect_interface": true,
