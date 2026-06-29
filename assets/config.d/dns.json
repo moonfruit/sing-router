@@ -60,7 +60,7 @@
       { "network": "icmp", "outbound": "DIRECT" },
       { "ip_is_private": true, "outbound": "DIRECT" },
       // 禁用 DoT/DoQ
-      { "port": 853, "action": "reject" },
+      { "port": 853, "action": "reject", "method": "drop" },
       { "action": "sniff" },
       { "protocol": "dns", "action": "hijack-dns" },
       // 禁用 DoH
@@ -71,7 +71,8 @@
           { "rule_set": "GeoSites@CN", "invert": true },
           { "protocol": ["http", "tls", "quic"], "rule_set": "DoH" }
         ],
-        "action": "reject"
+        "action": "reject",
+        "method": "drop"
       },
       { "protocol": ["bittorrent", "ntp", "stun"], "outbound": "DIRECT" },
       { "action": "sniff-override-destination" }
