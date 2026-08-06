@@ -1,36 +1,9 @@
 {
+  "$schema": "https://sing-box.sagernet.org/schema.json",
   "inbounds": [
-    {
-      "type": "direct",
-      "tag": "dns-in",
-      "listen": "::",
-      "listen_port": 1053
-    },
-    {
-      "type": "mixed",
-      "tag": "mixed-in",
-      "listen": "::",
-      "listen_port": 7890
-    },
-    {
-      "type": "redirect",
-      "tag": "redirect-in",
-      "listen": "::",
-      "listen_port": 7892
-    },
-    {
-      "type": "mixed",
-      "tag": "global-in",
-      "listen": "::",
-      "listen_port": 7898
-    },
-    {
-      "type": "tun",
-      "tag": "tun-in",
-      "interface_name": "utun",
-      "address": "11.0.0.1/30",
-      "auto_route": false,
-      "auto_redirect": false
-    }
+    { "type": "direct", "tag": "dns-in", "listen": "::", "listen_port": 1053 },
+    { "type": "mixed", "tag": "mixed-in", "listen": "::", "listen_port": 7890 },
+    { "type": "redirect", "tag": "redirect-in", "listen": "::", "listen_port": 7892 },
+    { "type": "mixed", "tag": "global-in", "listen": "::", "listen_port": 7898 }
   ]
 }

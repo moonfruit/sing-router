@@ -1,0 +1,25 @@
+{
+  "$schema": "https://sing-box.sagernet.org/schema.json",
+  "route": {
+    "rule_set": [
+      {
+        "type": "inline",
+        "tag": "LocalDomain",
+        "rules": [
+          {
+            "domain": [
+              "localhost.localdomain",
+              "localhost",
+              "ip6-localhost",
+              "ip6-loopback",
+              "ip6-localnet",
+              "ip6-mcastprefix",
+              "ip6-allnodes",
+              "ip6-allrouters"
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

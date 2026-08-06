@@ -14,6 +14,7 @@ import (
 
 	"github.com/moonfruit/sing-router/internal/config"
 	"github.com/moonfruit/sing-router/internal/firmware"
+	"github.com/moonfruit/sing-router/internal/install"
 	"github.com/moonfruit/sing-router/internal/notify"
 	"github.com/moonfruit/sing-router/internal/notify/bark"
 )
@@ -76,8 +77,15 @@ func runDoctorChecks(rundir string, opts doctorOpts) []doctorCheck {
 			out = append(out, checkDirExists(filepath.Join(rundir, sub), "rundir/"+sub))
 		}
 		out = append(out, checkExistsExec(filepath.Join(rundir, "bin", "sing-box")))
-		for _, c := range []string{"clash.json", "dns.json", "inbounds.json", "log.json", "zoo.json"} {
-			out = append(out, checkExistsAs(filepath.Join(rundir, "config.d", c), "config.d/"+c, "fail"))
+		// 逐个内嵌 fragment 检查存在性，而不是维护一份手工清单——手工清单必然
+		// 漂移：inline.json（定义 dns.json 引用的 LocalDomain）与 tun.json（tun-in，
+		// startup.sh 的 utun 路由依赖它）都是缺了就起不来的文件，却曾不在清单里。
+		if frags, err := install.EmbeddedConfigFragments(); err != nil {
+			out = append(out, doctorCheck{Name: "config.d/*", Status: "warn", Detail: err.Error()})
+		} else {
+			for _, rel := range frags {
+				out = append(out, checkExistsAs(filepath.Join(rundir, filepath.FromSlash(rel)), rel, "fail"))
+			}
 		}
 		out = append(out, checkExistsAs(filepath.Join(rundir, "var", "cn.txt"), "var/cn.txt", "warn"))
 		out = append(out, checkExistsExec("/opt/etc/init.d/S99sing-router"))

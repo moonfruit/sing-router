@@ -2,10 +2,13 @@ package config
 
 import (
 	"encoding/json"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/moonfruit/sing-router/assets"
 )
 
 func fakeRawURL(ref, path string) string {
@@ -150,4 +153,101 @@ func TestEnsureRequiredRuleSets_EmptyRequiredIsNoOp(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(cfgDir, SupplementalRuleSetFile)); !os.IsNotExist(err) {
 		t.Errorf("rule-set.json should not exist when required empty; err=%v", err)
 	}
+}
+
+// 回归守护：内嵌 fragment 引用的每个 rule_set tag，要么被某个 fragment 自己定义
+// （如 inline.json 的 LocalDomain），要么落在 DefaultRequiredRuleSets 里由
+// EnsureRequiredRuleSets 补齐。两头都不沾 → sing-box 启动时直接
+// `FATAL initialize dns router: rule-set not found: X`，daemon 陷入崩溃退避。
+//
+// 历史事故：dns.json 把内联 localhost 域名列表换成 rule_set "LocalDomain"、定义
+// 挪进新增的 inline.json，但 install 的 fragment 白名单没同步 → 装机后 inline.json
+// 缺失 → sing-box 拒绝启动。
+func TestEmbeddedFragmentsRuleSetsAllResolvable(t *testing.T) {
+	entries, err := fs.ReadDir(assets.FS(), "config.d")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	defined := map[string]bool{}
+	referenced := map[string]string{} // tag -> 首次引用它的文件
+
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		data, err := assets.ReadFile("config.d/" + e.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		var doc any
+		if err := json.Unmarshal(stripJSONCLineComments(data), &doc); err != nil {
+			t.Fatalf("config.d/%s 不是合法 JSON(C): %v", e.Name(), err)
+		}
+		for _, tag := range collectRuleSetTags(doc, "tag", "rule_set") {
+			defined[tag] = true
+		}
+		for _, tag := range collectRuleSetTags(doc, "rule_set", "") {
+			if _, ok := referenced[tag]; !ok {
+				referenced[tag] = e.Name()
+			}
+		}
+	}
+
+	required := map[string]bool{}
+	for _, r := range DefaultRequiredRuleSets {
+		required[r.Tag] = true
+	}
+
+	for tag, file := range referenced {
+		if defined[tag] || required[tag] {
+			continue
+		}
+		t.Errorf("config.d/%s 引用了 rule_set %q，但没有任何 fragment 定义它，"+
+			"DefaultRequiredRuleSets 里也没有——sing-box 会拒绝启动", file, tag)
+	}
+
+	// 反向：DefaultRequiredRuleSets 里的条目若已经没人引用，就是该删的残留。
+	for _, r := range DefaultRequiredRuleSets {
+		if _, ok := referenced[r.Tag]; !ok {
+			t.Errorf("DefaultRequiredRuleSets 含 %q，但内嵌 fragment 已无人引用；"+
+				"若真实 zoo.json 也不需要它，应删除该条目", r.Tag)
+		}
+	}
+}
+
+// collectRuleSetTags 递归收集 JSON 里的 rule_set tag。
+//   - key="rule_set", parentKey="": 收集所有引用点（值可以是 string 或 []string）
+//   - key="tag", parentKey="rule_set": 只收集 route.rule_set[] 定义里的 tag，
+//     避免把 outbound/inbound 的 tag 也算进来
+func collectRuleSetTags(node any, key, parentKey string) []string {
+	var out []string
+	var walk func(n any, inParent bool)
+	walk = func(n any, inParent bool) {
+		switch v := n.(type) {
+		case map[string]any:
+			for k, child := range v {
+				if k == key && (parentKey == "" || inParent) {
+					switch s := child.(type) {
+					case string:
+						out = append(out, s)
+					case []any:
+						for _, item := range s {
+							if str, ok := item.(string); ok {
+								out = append(out, str)
+							}
+						}
+					}
+					continue
+				}
+				walk(child, parentKey != "" && k == parentKey)
+			}
+		case []any:
+			for _, item := range v {
+				walk(item, inParent)
+			}
+		}
+	}
+	walk(node, false)
+	return out
 }

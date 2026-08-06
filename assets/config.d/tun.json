@@ -1,0 +1,16 @@
+{
+  "$schema": "https://sing-box.sagernet.org/schema.json",
+  "inbounds": [
+    {
+      "type": "tun",
+      "tag": "tun-in",
+      "interface_name": "utun",
+      "address": "11.0.0.1/30",
+      "auto_route": false,
+      "auto_redirect": false
+    }
+  ],
+  "route": {
+    "auto_detect_interface": true
+  }
+}

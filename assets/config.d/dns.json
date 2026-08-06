@@ -2,46 +2,39 @@
   "dns": {
     "servers": [
       // Resolver
-      { "tag": "dns-resolver", "type": "udp", "server": "223.5.5.5" },
+      { "tag": "dbs-pod-udp", "type": "udp", "server": "119.29.29.29" },
+      { "tag": "dns-aliyun-udp-1", "type": "udp", "server": "223.5.5.5" },
+      { "tag": "dns-aliyun-udp-2", "type": "udp", "server": "223.6.6.6" },
+      { "tag": "dns-resolver", "type": "group", "servers": ["dbs-pod-udp", "dns-aliyun-udp-1", "dns-aliyun-udp-2"] },
       // Direct
-      { "tag": "dns-direct", "type": "h3", "server": "dns.alidns.com", "domain_resolver": "dns-resolver" },
+      { "tag": "dns-aliyun", "type": "h3", "server": "dns.alidns.com", "domain_resolver": "dns-resolver" },
+      { "tag": "dns-pod", "type": "https", "server": "doh.pub", "domain_resolver": "dns-resolver" },
+      { "tag": "dns-direct", "type": "group", "servers": ["dns-pod", "dns-aliyun"] },
       // Proxy
       { "tag": "dns-one", "type": "h3", "server": "one.one.one.one", "detour": "🔰 默认出口" },
       { "tag": "dns-cloudflare", "type": "h3", "server": "cloudflare-dns.com", "detour": "🔰 默认出口" },
       { "tag": "dns-proxy", "type": "group", "servers": ["dns-one", "dns-cloudflare"] },
       // Hosts
-      {
-        "tag": "dns-hosts",
-        "type": "hosts",
-        "path": ["config.d/hosts", "/etc/hosts"]
-      },
+      { "tag": "dns-hosts", "type": "hosts", "path": ["config.d/hosts", "/etc/hosts"] },
+      // Local
+      { "tag": "dns-local", "type": "local", "neighbor_domain": [".lan", ".home.arpa"] },
       // FakeIP
       { "tag": "dns-fakeip", "type": "fakeip", "inet4_range": "28.0.0.0/8" }
     ],
     "rules": [
       // Hosts
-      {
-        "domain": [
-          "localhost.localdomain",
-          "localhost",
-          "ip6-localhost",
-          "ip6-loopback",
-          "ip6-localnet",
-          "ip6-mcastprefix",
-          "ip6-allnodes",
-          "ip6-allrouters"
-        ],
-        "action": "predefined",
-        "rcode": "NXDOMAIN"
-      },
+      { "rule_set": "LocalDomain", "action": "predefined", "rcode": "NXDOMAIN" },
       { "preferred_by": "dns-hosts", "server": "dns-hosts" },
+      // Local
+      { "preferred_by": "dns-local", "server": "dns-local" },
       // Clash
       { "clash_mode": "Direct", "server": "dns-direct" },
       { "clash_mode": "Global", "server": "dns-fakeip" },
       // Direct
       { "action": "evaluate", "server": "dns-direct" },
-      { "rule_set": ["Lan", "FakeIpBypass", "GeoSites@CN"], "action": "respond" },
+      { "rule_set": ["FakeIpBypass", "GeoSites@CN"], "action": "respond" },
       { "match_response": true, "rule_set": "GeoIP@CN", "action": "respond" },
+      // FakeIP
       { "query_type": ["A", "AAAA"], "server": "dns-fakeip", "rewrite_ttl": 1 }
     ],
     "final": "dns-proxy",
@@ -50,7 +43,6 @@
   },
   "route": {
     "rules": [
-      // 防自连回环
       {
         "source_ip_cidr": ["127.0.0.0/8", "::1/128", "192.168.50.1/32"],
         "inbound": ["dns-in", "redirect-in", "tproxy-in", "tun-in"],
@@ -59,27 +51,50 @@
       { "inbound": "dns-in", "action": "hijack-dns" },
       { "network": "icmp", "outbound": "DIRECT" },
       { "ip_is_private": true, "outbound": "DIRECT" },
-      // 禁用 DoT/DoQ
-      { "port": 853, "action": "reject", "method": "drop" },
       { "action": "sniff" },
       { "protocol": "dns", "action": "hijack-dns" },
-      // 禁用 DoH
       {
         "type": "logical",
         "mode": "and",
         "rules": [
-          { "rule_set": "GeoSites@CN", "invert": true },
-          { "protocol": ["http", "tls", "quic"], "rule_set": "DoH" }
+          { "rule_set": ["GeoIP@CN", "GeoSites@CN"], "invert": true },
+          {
+            "type": "logical",
+            "mode": "or",
+            "rules": [
+              { "network": "tcp", "port": 853 },
+              { "protocol": ["http", "tls"], "rule_set": "DoH" }
+            ]
+          }
+        ],
+        "action": "reject"
+      },
+      {
+        "type": "logical",
+        "mode": "and",
+        "rules": [
+          { "rule_set": ["GeoIP@CN", "GeoSites@CN"], "invert": true },
+          {
+            "type": "logical",
+            "mode": "or",
+            "rules": [
+              { "network": "udp", "port": 853 },
+              { "protocol": "quic", "rule_set": "DoH" }
+            ]
+          }
         ],
         "action": "reject",
         "method": "drop"
       },
       { "protocol": ["bittorrent", "ntp", "stun"], "outbound": "DIRECT" },
-      { "action": "sniff-override-destination" }
+      {
+        "rule_set": ["FakeIpBypass", "Private", "Direct", "GeoIP@CN", "GeoSites@CN"],
+        "invert": true,
+        "action": "sniff-override-destination"
+      }
     ],
-    "auto_detect_interface": true,
     "default_domain_resolver": "dns-direct",
-    "default_mark": "0x7890"
+    "default_mark": "0x7890",
+    "dhcp_lease_files": "/var/lib/misc/dnsmasq.leases"
   }
 }
-// vim: ft=jsonc

@@ -1,0 +1,15 @@
+{
+  "$schema": "https://sing-box.sagernet.org/schema.json",
+  "services": [
+    {
+      "type": "api",
+      "tag": "api-in",
+      "listen": "127.0.0.1",
+      "listen_port": 10000,
+      "dashboard": {
+        "enabled": true,
+        "http_client": "http-proxy"
+      }
+    }
+  ]
+}

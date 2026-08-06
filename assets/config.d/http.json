@@ -1,7 +1,10 @@
 {
+  "$schema": "https://sing-box.sagernet.org/schema.json",
   "http_clients": [
-    {
-      "tag": "http-direct"
-    }
-  ]
+    { "tag": "http-direct" },
+    { "tag": "http-proxy", "detour": "🔰 默认出口" }
+  ],
+  "route": {
+    "default_http_client": "http-direct"
+  }
 }

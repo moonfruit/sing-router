@@ -2,6 +2,7 @@ package install
 
 import (
 	"bytes"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/moonfruit/sing-router/assets"
+	"github.com/moonfruit/sing-router/internal/config"
 )
 
 func TestSeedWritesDefaultsWhenMissing(t *testing.T) {
@@ -25,20 +27,11 @@ func TestSeedWritesDefaultsWhenMissing(t *testing.T) {
 	if err := SeedDefaults(dir, vars); err != nil {
 		t.Fatal(err)
 	}
-	for _, p := range []string{
-		"daemon.toml",
-		"config.d/clash.json",
-		"config.d/dns.json",
-		"config.d/hosts",
-		"config.d/inbounds.json",
-		"config.d/log.json",
-		"config.d/cache.json",
-		"config.d/certificate.json",
-		"config.d/http.json",
-		"config.d/outbounds.json",
-		"config.d/zoo.json",
-		"var/cn.txt",
-	} {
+	fragments, err := EmbeddedConfigFragments()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range append([]string{"daemon.toml", "var/cn.txt"}, fragments...) {
 		if _, err := os.Stat(filepath.Join(dir, p)); err != nil {
 			t.Errorf("missing seed file %s: %v", p, err)
 		}
@@ -131,7 +124,7 @@ func TestSeedDefaults_CopiesEmbeddedRuleSets(t *testing.T) {
 		"var/rules/geoip-cn.srs",
 		"var/rules/geoip-cn.srs.etag",
 		"var/rules/geosites-cn.srs",
-		"var/rules/lan.srs",
+		"var/rules/doh.srs",
 		"var/rules/fakeip-bypass.srs",
 	} {
 		info, err := os.Stat(filepath.Join(dir, p))
@@ -269,19 +262,11 @@ func TestSeedDefaults_FirstInstallWritesSeedOnly(t *testing.T) {
 	if err := SeedDefaults(dir, TemplateVars{Firmware: "koolshare"}); err != nil {
 		t.Fatal(err)
 	}
-	for _, p := range []string{
-		"daemon.toml",
-		"config.d/clash.json",
-		"config.d/dns.json",
-		"config.d/hosts",
-		"config.d/inbounds.json",
-		"config.d/log.json",
-		"config.d/cache.json",
-		"config.d/certificate.json",
-		"config.d/http.json",
-		"config.d/outbounds.json",
-		"config.d/zoo.json",
-	} {
+	fragments, err := EmbeddedConfigFragments()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range append([]string{"daemon.toml"}, fragments...) {
 		seed := filepath.Join(dir, p)
 		if _, err := os.Stat(seed); err != nil {
 			t.Errorf("missing seed %s: %v", p, err)
@@ -430,5 +415,85 @@ func TestWriteDefaultAndSeed_FirstInstallSkipsDefault(t *testing.T) {
 	}
 	if _, err := os.Stat(full + ".default"); !os.IsNotExist(err) {
 		t.Errorf("first install should not create .default; stat err=%v", err)
+	}
+}
+
+// 回归守护：assets/config.d 下的每个文件都必须被 SeedDefaults 落到
+// $RUNDIR/config.d。这里刻意不复用 EmbeddedConfigFragments()，而是自己走一遍
+// 内嵌 FS——否则一旦有人把 seed 逻辑改回手工白名单，测试会跟着一起漏。
+//
+// 历史事故：dns.json 新引用的 rule_set 定义在新增的 inline.json 里，但手工白名单
+// 没加它 → 装机后 config.d 缺 inline.json → sing-box 报 rule-set not found 拒绝启动；
+// 同一次 tun.json 也漏了 → tun-in 入站整个消失，startup.sh 的 utun 路由随之失效。
+func TestSeedDefaults_CoversEveryEmbeddedConfigFragment(t *testing.T) {
+	dir := t.TempDir()
+	if err := EnsureLayout(dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := SeedDefaults(dir, TemplateVars{Firmware: "koolshare"}); err != nil {
+		t.Fatal(err)
+	}
+
+	entries, err := fs.ReadDir(assets.FS(), "config.d")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) == 0 {
+		t.Fatal("内嵌 config.d 为空，测试失去意义")
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		want, err := assets.ReadFile("config.d/" + e.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := os.ReadFile(filepath.Join(dir, "config.d", e.Name()))
+		if err != nil {
+			t.Errorf("config.d/%s 没有被 seed 到 rundir: %v", e.Name(), err)
+			continue
+		}
+		if !bytes.Equal(got, want) {
+			t.Errorf("config.d/%s 落盘内容与内嵌不一致", e.Name())
+		}
+	}
+}
+
+// 回归守护：DefaultRequiredRuleSets 里每个条目的 LocalRelPath，都必须真的被
+// seed 到 rundir。这是"无 gitee token"路径的生命线——EnsureRequiredRuleSets 在
+// 没有 token 时会写出 {type:"local", path:<LocalRelPath>} 的 rule_set 条目，
+// 文件不存在的话 sing-box 直接
+// `FATAL initialize router: parse rule-set: open .../x.srs: no such file`。
+//
+// 历史事故：DefaultRequiredRuleSets 要 var/rules/doh.srs，但 Makefile 的
+// RULE_SETS 和内嵌 assets/var/rules 里都没有它（内嵌的反而是没人用的 lan.srs），
+// 无 token 的机器装完直接起不来。
+func TestSeedDefaults_CoversRequiredRuleSetLocalPaths(t *testing.T) {
+	dir := t.TempDir()
+	if err := EnsureLayout(dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := SeedDefaults(dir, TemplateVars{Firmware: "koolshare"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(config.DefaultRequiredRuleSets) == 0 {
+		t.Fatal("DefaultRequiredRuleSets 为空，测试失去意义")
+	}
+	for _, rs := range config.DefaultRequiredRuleSets {
+		if rs.LocalRelPath == "" {
+			t.Errorf("rule_set %q 没有 LocalRelPath，无 token 时无法兜底", rs.Tag)
+			continue
+		}
+		info, err := os.Stat(filepath.Join(dir, rs.LocalRelPath))
+		if err != nil {
+			t.Errorf("rule_set %q 的兜底文件 %s 没被 seed 到 rundir: %v"+
+				"（检查 assets/var/rules/ 与 Makefile 的 RULE_SETS）",
+				rs.Tag, rs.LocalRelPath, err)
+			continue
+		}
+		if info.Size() == 0 {
+			t.Errorf("rule_set %q 的兜底文件 %s 是空的", rs.Tag, rs.LocalRelPath)
+		}
 	}
 }

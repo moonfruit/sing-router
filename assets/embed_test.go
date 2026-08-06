@@ -83,8 +83,14 @@ func TestDNSHostsExternalized(t *testing.T) {
 	if strings.Contains(s, `"predefined": {`) || strings.Contains(s, `"predefined":{`) {
 		t.Fatal("default dns.json still inlines predefined hosts map; should use external config.d/hosts")
 	}
-	if strings.Contains(s, "home.arpa") {
-		t.Fatal("default dns.json still inlines home.arpa entries; should live in config.d/hosts")
+	// 原先是对整个文件查 "home.arpa" 裸子串，但 dns-local 的 neighbor_domain 必须
+	// 声明 ".home.arpa" 后缀——那是后缀匹配规则，不是 hosts 条目。收窄为按行判断：
+	// dns.json 里 home.arpa 只允许出现在 neighbor_domain 中。
+	for _, line := range strings.Split(s, "\n") {
+		if strings.Contains(line, "home.arpa") && !strings.Contains(line, "neighbor_domain") {
+			t.Fatalf("default dns.json still inlines home.arpa entries (%q); should live in config.d/hosts",
+				strings.TrimSpace(line))
+		}
 	}
 	// 外置文件本身必须存在且非空。
 	hosts, err := ReadFile("config.d/hosts")
@@ -93,6 +99,10 @@ func TestDNSHostsExternalized(t *testing.T) {
 	}
 	if len(strings.TrimSpace(string(hosts))) == 0 {
 		t.Fatal("config.d/hosts is empty")
+	}
+	// 正向守护：条目确实落在 config.d/hosts 里（比上面的反向断言更能说明问题）。
+	if !strings.Contains(string(hosts), "home.arpa") {
+		t.Fatal("config.d/hosts should carry the home.arpa entries")
 	}
 }
 

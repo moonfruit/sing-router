@@ -25,8 +25,13 @@ var DefaultRequiredRuleSets = []RuleSetSource{
 	{Tag: "GeoIP@CN", GiteePath: "rules/geoip-cn.srs", LocalRelPath: "var/rules/geoip-cn.srs"},
 	{Tag: "GeoSites@CN", GiteePath: "rules/geosites-cn.srs", LocalRelPath: "var/rules/geosites-cn.srs"},
 	{Tag: "DoH", GiteePath: "rules/doh.srs", LocalRelPath: "var/rules/doh.srs"},
-	{Tag: "Lan", GiteePath: "rules/lan.srs", LocalRelPath: "var/rules/lan.srs"},
 	{Tag: "FakeIpBypass", GiteePath: "rules/fakeip-bypass.srs", LocalRelPath: "var/rules/fakeip-bypass.srs"},
+	// Private / Direct 由 gitee 下发的 zoo.json 定义，有 token 时
+	// scanProvidedRuleSetTags 会发现已提供、这里不重复补。但 dns.json 的
+	// sniff-override-destination 无条件引用它们，无 token 的机器上 zoo 拉不到 →
+	// 必须有本地兜底，否则 sing-box FATAL rule-set not found。
+	{Tag: "Private", GiteePath: "rules/private.srs", LocalRelPath: "var/rules/private.srs"},
+	{Tag: "Direct", GiteePath: "rules/direct.srs", LocalRelPath: "var/rules/direct.srs"},
 }
 
 // SupplementalRuleSetFile 是 EnsureRequiredRuleSets 自动生成的 fragment 文件名。

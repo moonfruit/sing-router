@@ -2,10 +2,60 @@ package cli
 
 import (
 	"bytes"
+	"io/fs"
+	"strings"
 	"testing"
 
+	"github.com/moonfruit/sing-router/assets"
 	"github.com/moonfruit/sing-router/internal/firmware"
 )
+
+// 回归守护：doctor 必须对每一个内嵌 config.d fragment 都出一条 fail 级检查。
+// 这里刻意走内嵌 FS 自己列一遍，而不是复用 install.EmbeddedConfigFragments()——
+// 否则有人把 doctor 改回手工清单时，测试会跟着一起漏。
+//
+// 历史事故：清单写死成 clash/dns/inbounds/log/zoo.json 五个，而 inline.json
+// （定义 dns.json 引用的 LocalDomain）和 tun.json（tun-in，startup.sh 的 utun
+// 路由靠它）缺失同样是起不来的 fatal，doctor 却报一切正常。
+func TestDoctorChecksEveryEmbeddedConfigFragment(t *testing.T) {
+	checks := runDoctorChecks(t.TempDir(), doctorOpts{skipRouting: true})
+	seen := map[string]string{}
+	for _, c := range checks {
+		seen[c.Name] = c.Status
+	}
+
+	entries, err := fs.ReadDir(assets.FS(), "config.d")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) == 0 {
+		t.Fatal("内嵌 config.d 为空，测试失去意义")
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := "config.d/" + e.Name()
+		status, ok := seen[name]
+		if !ok {
+			t.Errorf("doctor 没有检查 %s（缺了它 sing-box 起不来，doctor 却报不出）", name)
+			continue
+		}
+		// rundir 是空的 TempDir → 文件必然缺失，且必须判 fail 而不是 warn。
+		if status != "fail" {
+			t.Errorf("%s 缺失时 doctor 判 %q，应为 fail", name, status)
+		}
+	}
+}
+
+// doctor 的 config.d 检查名必须是稳定的 "config.d/xxx" 形式（JSON 输出的键）。
+func TestDoctorConfigCheckNamesUseSlashPath(t *testing.T) {
+	for _, c := range runDoctorChecks(t.TempDir(), doctorOpts{skipRouting: true}) {
+		if strings.HasPrefix(c.Name, "config.d") && strings.Contains(c.Name, "\\") {
+			t.Errorf("check name %q 含反斜杠，应统一用 / 分隔", c.Name)
+		}
+	}
+}
 
 func TestDoctorHookCheck_PresentRequiredPasses(t *testing.T) {
 	got := doctorHookCheck(firmware.HookCheck{Type: "file", Path: "/x", Required: true, Present: true, Note: "n"})

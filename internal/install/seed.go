@@ -3,8 +3,11 @@ package install
 import (
 	"bytes"
 	"errors"
+	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"text/template"
 	"time"
 
@@ -21,21 +24,57 @@ type TemplateVars struct {
 	GiteeToken      string // [gitee].token；空字符串 → 渲染为 token = ""，与历史行为一致
 }
 
-// followBinarySeeds 是"跟随二进制刷新"的路径集——每对 src(embed) → dst(rundir)。
+// followBinaryFixedSeeds 是"跟随二进制刷新"里路径固定的那部分。
+// var/rules/ 下的 rule_set 兜底不写在这里——见 followBinarySeeds()。
+var followBinaryFixedSeeds = []string{
+	"var/cn.txt",
+	"var/cn.txt.etag",
+}
+
+// followBinarySeeds 返回"跟随二进制刷新"的全部路径（embed 与 rundir 同名）。
 // 这些都是数据资源（cn.txt / rule_set 内嵌兜底），用 writeIfNewer：rundir 文件
 // 比当前 binary mtime 旧时覆盖；用户跑了 sing-router update 之后 rundir 文件
 // 更新过 → 比 binary 还新 → 不覆盖，保留下载下来的最新版本。
-var followBinarySeeds = map[string]string{
-	"var/cn.txt":                       "var/cn.txt",
-	"var/cn.txt.etag":                  "var/cn.txt.etag",
-	"var/rules/geoip-cn.srs":           "var/rules/geoip-cn.srs",
-	"var/rules/geoip-cn.srs.etag":      "var/rules/geoip-cn.srs.etag",
-	"var/rules/geosites-cn.srs":        "var/rules/geosites-cn.srs",
-	"var/rules/geosites-cn.srs.etag":   "var/rules/geosites-cn.srs.etag",
-	"var/rules/lan.srs":                "var/rules/lan.srs",
-	"var/rules/lan.srs.etag":           "var/rules/lan.srs.etag",
-	"var/rules/fakeip-bypass.srs":      "var/rules/fakeip-bypass.srs",
-	"var/rules/fakeip-bypass.srs.etag": "var/rules/fakeip-bypass.srs.etag",
+//
+// var/rules/ 同样按内嵌目录枚举而不是手工列举：清单曾与 Makefile 的 RULE_SETS
+// 漂移（内嵌了用不上的 lan.srs，却缺了 DefaultRequiredRuleSets 需要的 doh.srs），
+// 结果无 token 的机器上 EnsureRequiredRuleSets 写出 local 条目指向不存在的文件，
+// sing-box 直接 `parse rule-set: no such file` 拒绝启动。
+func followBinarySeeds() ([]string, error) {
+	entries, err := fs.ReadDir(assets.FS(), "var/rules")
+	if err != nil {
+		return nil, fmt.Errorf("list embedded var/rules: %w", err)
+	}
+	out := make([]string, 0, len(entries)+len(followBinaryFixedSeeds))
+	out = append(out, followBinaryFixedSeeds...)
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		out = append(out, "var/rules/"+e.Name())
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+// EmbeddedConfigFragments 列出内嵌 config.d/ 下的全部文件（"config.d/xxx" 形式，
+// 已排序）。这里刻意不写死清单——历史上手工维护的白名单曾漏掉新增 fragment，
+// 导致 install 后 config.d 缺文件、sing-box 因引用不到 rule_set 直接拒绝启动。
+// assets/config.d 与 $RUNDIR/config.d 是一一对应关系，全量拷贝即正确行为。
+func EmbeddedConfigFragments() ([]string, error) {
+	entries, err := fs.ReadDir(assets.FS(), "config.d")
+	if err != nil {
+		return nil, fmt.Errorf("list embedded config.d: %w", err)
+	}
+	out := make([]string, 0, len(entries))
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		out = append(out, "config.d/"+e.Name())
+	}
+	sort.Strings(out)
+	return out, nil
 }
 
 // SeedDefaults 把内嵌资源拷到 rundir：
@@ -46,29 +85,25 @@ var followBinarySeeds = map[string]string{
 //   - var/cn.txt + var/rules/*.srs（含 etag）走 writeIfNewer（跟随二进制 mtime；
 //     用户 sing-router update 后的下载内容不会被覆盖）
 func SeedDefaults(rundir string, vars TemplateVars) error {
-	plainFiles := map[string]string{
-		"config.d/clash.json":       "config.d/clash.json",
-		"config.d/dns.json":         "config.d/dns.json",
-		"config.d/hosts":            "config.d/hosts",
-		"config.d/inbounds.json":    "config.d/inbounds.json",
-		"config.d/log.json":         "config.d/log.json",
-		"config.d/cache.json":       "config.d/cache.json",
-		"config.d/certificate.json": "config.d/certificate.json",
-		"config.d/http.json":        "config.d/http.json",
-		"config.d/outbounds.json":   "config.d/outbounds.json",
-		"config.d/zoo.json":         "config.d/zoo.json",
+	plainFiles, err := EmbeddedConfigFragments()
+	if err != nil {
+		return err
 	}
-	for src, dst := range plainFiles {
-		if err := writeDefaultAndSeed(rundir, dst, func() ([]byte, error) {
+	for _, src := range plainFiles {
+		if err := writeDefaultAndSeed(rundir, src, func() ([]byte, error) {
 			return assets.ReadFile(src)
 		}); err != nil {
 			return err
 		}
 	}
 
+	dataSeeds, err := followBinarySeeds()
+	if err != nil {
+		return err
+	}
 	binMtime := binaryMtime()
-	for src, dst := range followBinarySeeds {
-		if err := writeIfNewer(rundir, dst, binMtime, func() ([]byte, error) {
+	for _, src := range dataSeeds {
+		if err := writeIfNewer(rundir, src, binMtime, func() ([]byte, error) {
 			return assets.ReadFile(src)
 		}); err != nil {
 			return err
