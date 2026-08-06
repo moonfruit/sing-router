@@ -13,10 +13,16 @@ import (
 
 	"github.com/moonfruit/sing-router/internal/config"
 	syncpkg "github.com/moonfruit/sing-router/internal/sync"
+	"github.com/moonfruit/sing-router/internal/zashboard"
 )
 
 func TestRunSyncOnceGeneratesZashboard(t *testing.T) {
 	ui := t.TempDir()
+	// external UI 必须"已安装"（目录里有非本包写的文件）才会生成，
+	// 理由见 zashboard.Generate 的注释。
+	if err := os.WriteFile(filepath.Join(ui, "index.html"), []byte("<html></html>"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	em := newTestEmitter(t)
 	cfg := SyncLoopConfig{
 		ZashboardUIDir:        ui,
@@ -24,8 +30,8 @@ func TestRunSyncOnceGeneratesZashboard(t *testing.T) {
 	}
 	generateZashboard(context.Background(), em, cfg)
 
-	if _, err := os.Stat(filepath.Join(ui, "zashboard.json")); err != nil {
-		t.Fatalf("zashboard.json not generated: %v", err)
+	if _, err := os.Stat(filepath.Join(ui, zashboard.SettingsFileName)); err != nil {
+		t.Fatalf("%s not generated: %v", zashboard.SettingsFileName, err)
 	}
 }
 

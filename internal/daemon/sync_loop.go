@@ -15,7 +15,8 @@ type SyncLoopConfig struct {
 	IntervalSec     int
 	OnStartDelaySec int
 	AutoApply       bool // true:拉到新资源后自动 apply(zoo/sing-box → restart;cn.txt → ipset reload);false:仅 log
-	// ZashboardUIDir 非空时,每轮 sync 末尾本地生成 <UIDir>/zashboard.json(独立步骤,不进 Applier)。
+	// ZashboardUIDir 非空时,每轮 sync 末尾本地生成 <UIDir>/zashboard-settings.json
+	// (独立步骤,不进 Applier)。sing-box 更新 external UI 时会清空该目录,靠这里每轮重写自愈。
 	ZashboardUIDir        string
 	ZashboardStaticLabels map[string]string
 }
@@ -111,8 +112,9 @@ func runSyncOnce(ctx context.Context, u *syncpkg.Updater, em *clef.Emitter, appl
 	}
 }
 
-// generateZashboard 本地生成 ui/zashboard.json(source-ip-label-list)。
-// 独立于资源 apply:不进 Applier、不触发 restart。ui_dir 不存在则静默跳过。
+// generateZashboard 本地生成 ui/zashboard-settings.json(source-ip-label-list)。
+// 独立于资源 apply:不进 Applier、不触发 restart。
+// ui_dir 不存在、或 external UI 尚未装好时静默跳过(理由见 zashboard.Generate)。
 func generateZashboard(ctx context.Context, em *clef.Emitter, cfg SyncLoopConfig) {
 	if cfg.ZashboardUIDir == "" {
 		return
@@ -126,12 +128,14 @@ func generateZashboard(ctx context.Context, em *clef.Emitter, cfg SyncLoopConfig
 		em.Warn("zashboard", "zashboard.generate.failed", "zashboard generate failed: {Err}",
 			map[string]any{"Err": err.Error()})
 	case res.Skipped:
-		em.Debug("zashboard", "zashboard.generate.skipped", "ui_dir absent; zashboard generation skipped", nil)
+		em.Debug("zashboard", "zashboard.generate.skipped",
+			"zashboard generation skipped: {Reason}", map[string]any{"Reason": string(res.SkipReason)})
 	case res.Changed:
-		em.Info("zashboard", "zashboard.generate.updated", "zashboard.json updated ({Count} entries)",
-			map[string]any{"Count": res.Count})
+		em.Info("zashboard", "zashboard.generate.updated", "{File} updated ({Count} entries)",
+			map[string]any{"File": zashboard.SettingsFileName, "Count": res.Count})
 	default:
-		em.Debug("zashboard", "zashboard.generate.unchanged", "zashboard.json unchanged", nil)
+		em.Debug("zashboard", "zashboard.generate.unchanged", "{File} unchanged",
+			map[string]any{"File": zashboard.SettingsFileName})
 	}
 }
 

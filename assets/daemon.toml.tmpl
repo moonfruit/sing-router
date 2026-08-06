@@ -161,8 +161,9 @@ auto_start          = {{ .AutoStart }}
 firmware            = "{{ .Firmware }}"
 
 [zashboard]
-# ui/zashboard.json（zashboard web 可导入的 source-ip-label-list）生成所用的静态标签表。
-# ui_dir 存在即每轮 sync 生成；路由器 custom_clientlist 数据优先，下表只补缺失的 key。
+# ui/zashboard-settings.json（zashboard web 可导入的 source-ip-label-list）生成所用的静态标签表。
+# ui_dir 存在、且 sing-box 已把 external UI 下载解压完成后，每轮 sync 生成；
+# 路由器 custom_clientlist 数据优先，下表只补缺失的 key。
 [zashboard.static_labels]
 "127.0.0.1"         = "🌐本机"
 "11.0.0.1"          = "🌐TUN"

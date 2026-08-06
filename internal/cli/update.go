@@ -27,7 +27,7 @@ func newUpdateCmd() *cobra.Command {
 	var apply bool
 	cmd := &cobra.Command{
 		Use:   "update [sing-box|cn|zoo|zashboard|all]",
-		Short: "Pull latest sing-box / cn.txt / zoo.json from gitee; locally regenerate ui/zashboard.json",
+		Short: "Pull latest sing-box / cn.txt / zoo.json from gitee; locally regenerate ui/zashboard-settings.json",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			target := "all"
@@ -167,7 +167,7 @@ func printZashboard(out interface {
 	}
 	switch {
 	case res.Skipped:
-		fmt.Fprintf(out, "ℹ %-10s  skipped (ui_dir absent)\n", "zashboard")
+		fmt.Fprintf(out, "ℹ %-10s  skipped (%s)\n", "zashboard", res.SkipReason)
 	case res.Changed:
 		fmt.Fprintf(out, "✓ %-10s  updated  (%d entries)\n", "zashboard", res.Count)
 	default:

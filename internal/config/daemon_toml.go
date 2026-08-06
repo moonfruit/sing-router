@@ -205,7 +205,7 @@ type InstallConfig struct {
 	Firmware        string `toml:"firmware"` // "koolshare" | "merlin" | ""
 }
 
-// ZashboardConfig 控制 ui/zashboard.json（source-ip-label-list）生成。
+// ZashboardConfig 控制 ui/zashboard-settings.json（source-ip-label-list）生成。
 // StaticLabels 为补充路由器客户端列表里没有的基础设施项；冲突时路由器数据优先。
 type ZashboardConfig struct {
 	StaticLabels map[string]string `toml:"static_labels"`

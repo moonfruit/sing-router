@@ -85,9 +85,20 @@ func TestGenerateSkipWhenUIDirAbsent(t *testing.T) {
 	}
 }
 
+// fakeInstalledUI 造一个"external UI 已装好"的 ui_dir：只要有一个不属于本包的
+// 文件，Generate 就认为 sing-box 已经把 UI 解压过了。
+func fakeInstalledUI(t *testing.T) string {
+	t.Helper()
+	ui := t.TempDir()
+	if err := os.WriteFile(filepath.Join(ui, "index.html"), []byte("<html></html>"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return ui
+}
+
 func TestGenerateWritesStaticOnly(t *testing.T) {
 	// mac 上 Collect 的命令/文件都缺失 → 仅静态表生效，端到端验证 Generate。
-	ui := t.TempDir()
+	ui := fakeInstalledUI(t)
 	static := map[string]string{"127.0.0.1": "💻本机"}
 	res, err := Generate(context.Background(), ui, static)
 	if err != nil {
@@ -96,11 +107,59 @@ func TestGenerateWritesStaticOnly(t *testing.T) {
 	if res.Skipped || !res.Changed || res.Count != 1 {
 		t.Fatalf("unexpected result %#v", res)
 	}
-	data, err := os.ReadFile(filepath.Join(ui, "zashboard.json"))
+	data, err := os.ReadFile(filepath.Join(ui, SettingsFileName))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(string(data), "💻本机") {
 		t.Fatalf("file missing label:\n%s", data)
+	}
+}
+
+// 回归守护：external UI 还没装好时绝不能写文件。
+//
+// reF1nd 版 clashapi 的 checkAndDownloadExternalUI 只在 `len(entries) == 0` 时
+// 首次下载 UI。我们的文件会让 ui_dir 恒非空——UI 下载失败过一次（无网 / 代理没起来）
+// 之后就再也不会重试，面板永久 404。所以这里既要跳过，还要把残留清掉。
+func TestGenerateSkipsAndCleansWhenUINotInstalled(t *testing.T) {
+	ui := t.TempDir()
+	// 模拟上一版留下的两种残留
+	for _, n := range []string{SettingsFileName, legacyFileName} {
+		if err := os.WriteFile(filepath.Join(ui, n), []byte("{}"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	res, err := Generate(context.Background(), ui, map[string]string{"127.0.0.1": "💻本机"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Skipped || res.SkipReason != SkipUINotInstalled {
+		t.Fatalf("want skip(%s), got %#v", SkipUINotInstalled, res)
+	}
+	entries, err := os.ReadDir(ui)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("ui_dir should be left empty so sing-box retries the UI download, got %v", entries)
+	}
+}
+
+// UI 装好后，旧文件名要被清掉，只留 SettingsFileName——否则 zashboard 里会
+// 出现两份来源不明的配置。
+func TestGenerateRemovesLegacyFile(t *testing.T) {
+	ui := fakeInstalledUI(t)
+	legacy := filepath.Join(ui, legacyFileName)
+	if err := os.WriteFile(legacy, []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Generate(context.Background(), ui, map[string]string{"127.0.0.1": "💻本机"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(legacy); !os.IsNotExist(err) {
+		t.Fatalf("legacy %s should be removed; stat err=%v", legacyFileName, err)
+	}
+	if _, err := os.Stat(filepath.Join(ui, SettingsFileName)); err != nil {
+		t.Fatalf("%s missing: %v", SettingsFileName, err)
 	}
 }

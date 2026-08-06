@@ -49,6 +49,10 @@ func TestUpdate_MissingTokenFails(t *testing.T) {
 
 func TestRunZashboardUpdateWritesFile(t *testing.T) {
 	ui := t.TempDir()
+	// 模拟 external UI 已装好；空 ui_dir 会被刻意跳过（见 zashboard.Generate）。
+	if err := os.WriteFile(filepath.Join(ui, "index.html"), []byte("<html></html>"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	res, err := zashboard.Generate(context.Background(), ui,
 		map[string]string{"127.0.0.1": "💻本机"})
 	if err != nil {
@@ -57,7 +61,7 @@ func TestRunZashboardUpdateWritesFile(t *testing.T) {
 	if !res.Changed || res.Count != 1 {
 		t.Fatalf("unexpected %#v", res)
 	}
-	if _, err := os.Stat(filepath.Join(ui, "zashboard.json")); err != nil {
+	if _, err := os.Stat(filepath.Join(ui, zashboard.SettingsFileName)); err != nil {
 		t.Fatalf("not written: %v", err)
 	}
 }

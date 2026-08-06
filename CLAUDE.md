@@ -63,7 +63,7 @@ docs/superpowers/{specs,plans}/  # 设计稿与实施计划（按阶段 module-a
        │        Ready check：TCP dial 127.0.0.1:7890 (mixed-in) + clash API /version；
        │        子进程崩溃 → 立即 Shutdown 拆 iptables → 退避（BackoffMs ladder）→ Startup
        └─ SyncLoop (interval>0 时): updater.UpdateAll → applier.ApplyAll（auto_apply=true）；
-          每轮末尾另调 zashboard.Generate 本地生成 ui/zashboard.json（独立步骤，不进 Applier）
+          每轮末尾另调 zashboard.Generate 本地生成 ui/zashboard-settings.json（独立步骤，不进 Applier）
 ```
 
 固件钩子（install 触发，按 firmware 类型分支）：
@@ -127,7 +127,13 @@ sha256 真变化闸门保留（"是否触发 Restart"的判断）：gitee 上游
 
 `internal/log/EmitterStack.Close(ctx)` 的顺序合约：先 unsubscribe writer 与 extras → 并行调每个 extra 的 closeFn（如 seq.Sink 的 drain 包装，受 `[seq].close_drain_timeout_seconds` 总预算约束，默认 10s）→ Bus.Close（drain 给 writer）→ Writer.Close。**改这条顺序前先看 `internal/log/wireup.go` 的注释**——它保证 sink drain 期间的诊断事件仍能落本地 log。`EmitterStack.Close` 是幂等的，daemon 主路径用 defer 调一次即可。
 
-`[zashboard].static_labels` 控制 `ui/zashboard.json`（zashboard web 可导入的 source-ip-label-list）的本地生成。daemon 采集四类数据源：nvram `custom_clientlist`（路由器静态绑定）、`/proc/net/arp`（IPv4 邻居）、dnsmasq.leases（DHCP 租约）、`ip -6 neigh`（IPv6 邻居），与 `[zashboard.static_labels]` 静态表合并（路由器采集数据优先）。`ui_dir` 存在即生成，每轮 sync 末尾触发（独立步骤，不经 Applier、不触发 sing-box restart）；CLI `update zashboard` / `update all` 手动触发同一逻辑。无独立 enable flag，静态标签表为空时仍会生成（仅动态采集结果）。
+`[zashboard].static_labels` 控制 `ui/zashboard-settings.json`（zashboard web 可导入的 source-ip-label-list）的本地生成。daemon 采集四类数据源：nvram `custom_clientlist`（路由器静态绑定）、`/proc/net/arp`（IPv4 邻居）、dnsmasq.leases（DHCP 租约）、`ip -6 neigh`（IPv6 邻居），与 `[zashboard.static_labels]` 静态表合并（路由器采集数据优先）。每轮 sync 末尾触发（独立步骤，不经 Applier、不触发 sing-box restart）；CLI `update zashboard` / `update all` 手动触发同一逻辑。无独立 enable flag，静态标签表为空时仍会生成（仅动态采集结果）。
+
+**ui_dir 是与 sing-box 共享的目录，`zashboard.Generate` 为此有两条硬约束**（对应 reF1nd 版 `experimental/clashapi` 的实际行为，改前先回去读源码）：
+1. **UI 没装好就不写，还要清掉自己的残留**。sing-box 只在 `ui_dir` 为空时才首次下载 external UI（`checkAndDownloadExternalUI`：`len(entries) == 0 || update`）。我们的文件会让目录恒非空——UI 下载失败过一次（开机无网 / 代理没起来）就再没有第二次机会，面板永久 404。故 `externalUIInstalled` 排除本包自己写的文件后若目录为空，则跳过生成并 `removeOwnFiles`。
+2. **文件会被 sing-box 删掉，靠每轮重写自愈**。`external_ui_update_interval` 到点时带 `If-None-Match` 请求：304 则原地返回、不动目录（所以"上游没更新时定时更新什么都不做"成立）；一旦 200，先 `removeAllInDirectory(ui_dir)` 再解压，我们的文件必然被清掉。不做对抗，空窗最长一个 sync interval。
+
+历史文件名 `zashboard.json` 见到即删——留着既是第二份来源不明的配置，也会单独占住 ui_dir 触发第 1 条的故障。
 
 ## 测试与质量门
 
