@@ -4,8 +4,9 @@
     {
       "type": "api",
       "tag": "api-in",
-      "listen": "127.0.0.1",
+      "listen": "::",
       "listen_port": 10000,
+      "access_control_allow_private_network": true,
       "dashboard": {
         "enabled": true,
         "http_client": "http-proxy"
