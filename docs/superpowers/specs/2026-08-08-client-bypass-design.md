@@ -127,6 +127,30 @@ next(w, r)
 
 任一条目不合法则整个请求失败，不做部分接受——避免客户端以为注册成功了却少了一个地址。
 
+## 平台验证（已实测）
+
+2026-08-08 在目标设备上实测，本设计依赖的全部内核能力均可用。
+
+环境：RT-BE88U / Koolcenter mod / Linux 4.19.294 aarch64 / ipset userspace v7.6、内核 protocol 6。
+
+| 依赖假设 | 实测结果 |
+|---|---|
+| `hash:ip timeout N` 可创建 | ✅ Header 显示 `timeout 10` |
+| 条目 TTL 递减 | ✅ `10 → 9` |
+| **内核自动删除过期条目** | ✅ 约 10s 后条目自行消失 |
+| `-exist add` 续约（含对已过期条目） | ✅ 重建为 `timeout 599` |
+| `timeout 0` = 永久 | ✅ 恒显示 `timeout 0`，不递减 |
+| `hash:mac` 可创建与添加 | ✅ |
+| `iptables -m set --match-set <ip-set> src` | ✅ 语法接受 |
+| `iptables -m set --match-set <mac-set> src` | ✅ 语法接受 |
+| 被规则引用时禁止 `destroy` | ✅ `it is in use by a kernel component` |
+
+三点实现约束由实测导出：
+
+1. **`-exist add` 对已过期条目是「重建」而非「刷新」**。续约逻辑不能假设条目仍然存在，也不需要——效果等价。
+2. **userspace（v7.6）比内核（protocol 6）新**，`ipset` 每次调用可能往 stderr 打 `Warning: Kernel support protocol versions 6-6 while userspace supports protocol versions 6-7`。daemon 的 `ipsetRun` **只能以退出码判断成败，不得把 stderr 非空视为失败**；`startup.sh` 中相应位置已有 `2>/dev/null`。
+3. **`destroy` 的引用检查已确认存在**，`teardown.sh` 现有的「先拆 iptables 再 destroy ipset」顺序是必需的，不能调换。
+
 ## ipset 布局与生命周期
 
 三种生命周期各不相同，因此是三个 set：
