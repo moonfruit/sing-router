@@ -26,7 +26,7 @@
       { "rule_set": "LocalDomain", "action": "predefined", "rcode": "NXDOMAIN" },
       { "preferred_by": "dns-hosts", "server": "dns-hosts" },
       // Local
-      { "preferred_by": "dns-local", "server": "dns-local" },
+      { "preferred_by": "dns-local", "server": "dns-local", "rewrite_ttl": 3600 },
       // Clash
       { "clash_mode": "Direct", "server": "dns-direct" },
       { "clash_mode": "Global", "server": "dns-fakeip" },
@@ -98,3 +98,4 @@
     "dhcp_lease_files": "/var/lib/misc/dnsmasq.leases"
   }
 }
+// vim: ft=jsonc
