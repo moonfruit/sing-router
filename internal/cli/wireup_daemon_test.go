@@ -20,7 +20,7 @@ import (
 )
 
 func TestBuildStatusExtraIncludesFirmware(t *testing.T) {
-	f := buildStatusExtra("/opt/home/sing-router", "config.d", "koolshare")
+	f := buildStatusExtra("/opt/home/sing-router", "config", "koolshare")
 	snap := f()
 	if snap["firmware"] != "koolshare" {
 		t.Fatalf("firmware=%v want koolshare", snap["firmware"])
@@ -29,13 +29,13 @@ func TestBuildStatusExtraIncludesFirmware(t *testing.T) {
 	if !ok {
 		t.Fatalf("config key missing or wrong type: %+v", snap["config"])
 	}
-	if cfg["config_dir"] != "/opt/home/sing-router/config.d" {
+	if cfg["config_dir"] != "/opt/home/sing-router/config" {
 		t.Fatalf("config_dir=%v", cfg["config_dir"])
 	}
 }
 
 func TestBuildStatusExtraEmptyFirmwareReportsUnknown(t *testing.T) {
-	f := buildStatusExtra("/opt/home/sing-router", "config.d", "")
+	f := buildStatusExtra("/opt/home/sing-router", "config", "")
 	snap := f()
 	if snap["firmware"] != "unknown" {
 		t.Fatalf("empty firmware should report 'unknown', got %v", snap["firmware"])

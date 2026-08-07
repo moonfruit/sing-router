@@ -98,7 +98,7 @@ func newInstallCmd() *cobra.Command {
 				Firmware:        string(kind),
 				GiteeToken:      giteeToken,
 			}
-			if err := run("seed default config.d/* and render daemon.toml", func() error {
+			if err := run("seed default config/* and render daemon.toml", func() error {
 				return install.SeedDefaults(rundir, vars)
 			}); err != nil {
 				return err

@@ -8,16 +8,16 @@ import (
 
 func TestDefaultConfigsPresent(t *testing.T) {
 	for _, p := range []string{
-		"config.d/clash.json",
-		"config.d/dns.json",
-		"config.d/hosts",
-		"config.d/inbounds.json",
-		"config.d/log.json",
-		"config.d/cache.json",
-		"config.d/certificate.json",
-		"config.d/http.json",
-		"config.d/outbounds.json",
-		"config.d/zoo.json",
+		"config/clash.json",
+		"config/dns.json",
+		"config/hosts",
+		"config/inbounds.json",
+		"config/log.json",
+		"config/cache.json",
+		"config/certificate.json",
+		"config/http.json",
+		"config/outbounds.json",
+		"config/zoo.json",
 		"daemon.toml.tmpl",
 		"initd/S99sing-router",
 		"firmware/koolshare/N99sing-router.sh.tmpl",
@@ -56,7 +56,7 @@ func TestDaemonTomlTemplateHasSeqSection(t *testing.T) {
 }
 
 func TestDNSFakeIPRangeFixed(t *testing.T) {
-	data, err := ReadFile("config.d/dns.json")
+	data, err := ReadFile("config/dns.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,41 +68,41 @@ func TestDNSFakeIPRangeFixed(t *testing.T) {
 	}
 }
 
-// TestDNSHostsExternalized 守护：dns-hosts 必须从外置 config.d/hosts 文件读取
-// （install 会把它落到 $RUNDIR/config.d/hosts），且不再内联 predefined 映射。
+// TestDNSHostsExternalized 守护：dns-hosts 必须从外置 config/hosts 文件读取
+// （install 会把它落到 $RUNDIR/config/hosts），且不再内联 predefined 映射。
 func TestDNSHostsExternalized(t *testing.T) {
-	data, err := ReadFile("config.d/dns.json")
+	data, err := ReadFile("config/dns.json")
 	if err != nil {
 		t.Fatal(err)
 	}
 	s := string(data)
-	if !strings.Contains(s, `"config.d/hosts"`) {
-		t.Fatal("default dns.json should reference external hosts file config.d/hosts")
+	if !strings.Contains(s, `"config/hosts"`) {
+		t.Fatal("default dns.json should reference external hosts file config/hosts")
 	}
 	// 注意：route 规则里的 "action": "predefined" 是另一回事，这里只盯内联 hosts 映射键。
 	if strings.Contains(s, `"predefined": {`) || strings.Contains(s, `"predefined":{`) {
-		t.Fatal("default dns.json still inlines predefined hosts map; should use external config.d/hosts")
+		t.Fatal("default dns.json still inlines predefined hosts map; should use external config/hosts")
 	}
 	// 原先是对整个文件查 "home.arpa" 裸子串，但 dns-local 的 neighbor_domain 必须
 	// 声明 ".home.arpa" 后缀——那是后缀匹配规则，不是 hosts 条目。收窄为按行判断：
 	// dns.json 里 home.arpa 只允许出现在 neighbor_domain 中。
 	for _, line := range strings.Split(s, "\n") {
 		if strings.Contains(line, "home.arpa") && !strings.Contains(line, "neighbor_domain") {
-			t.Fatalf("default dns.json still inlines home.arpa entries (%q); should live in config.d/hosts",
+			t.Fatalf("default dns.json still inlines home.arpa entries (%q); should live in config/hosts",
 				strings.TrimSpace(line))
 		}
 	}
 	// 外置文件本身必须存在且非空。
-	hosts, err := ReadFile("config.d/hosts")
+	hosts, err := ReadFile("config/hosts")
 	if err != nil {
-		t.Fatalf("missing config.d/hosts: %v", err)
+		t.Fatalf("missing config/hosts: %v", err)
 	}
 	if len(strings.TrimSpace(string(hosts))) == 0 {
-		t.Fatal("config.d/hosts is empty")
+		t.Fatal("config/hosts is empty")
 	}
-	// 正向守护：条目确实落在 config.d/hosts 里（比上面的反向断言更能说明问题）。
+	// 正向守护：条目确实落在 config/hosts 里（比上面的反向断言更能说明问题）。
 	if !strings.Contains(string(hosts), "home.arpa") {
-		t.Fatal("config.d/hosts should carry the home.arpa entries")
+		t.Fatal("config/hosts should carry the home.arpa entries")
 	}
 }
 

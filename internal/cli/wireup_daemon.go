@@ -136,7 +136,7 @@ func realRunDaemon(ctx context.Context, rundir string) error {
 			"[notify].enabled=true but no usable channel configured; sink not attached", nil)
 	}
 
-	// 把 var/zoo.raw.json（由 sync.Updater 拉取）预处理写入 config.d/zoo.json。
+	// 把 var/zoo.raw.json（由 sync.Updater 拉取）预处理写入 config/zoo.json。
 	// 缺失即跳过，保留种子默认；预处理失败仅警告，daemon 继续用上次成功的 zoo.json。
 	if stats, err := config.PreprocessZooFile(rundir, cfg.Runtime.ConfigDir); err != nil {
 		em.Warn("config", "config.zoo.preprocess.failed", "preprocess zoo: {Err}", map[string]any{"Err": err.Error()})
@@ -324,7 +324,7 @@ type supervisorWiring struct {
 
 // readyCheckDialMixedPort 是 ready check 默认要 dial 的本机端口。
 //
-// 必须与 assets/config.d/inbounds.json 中 mixed-in 的 listen_port 保持一致；
+// 必须与 assets/config/inbounds.json 中 mixed-in 的 listen_port 保持一致；
 // 改 inbounds.json 时同步改这里（或反过来）。
 //
 // 为什么不 dial dns-in (1053) / redirect-in (7892)：那两个 inbound 是 transparent

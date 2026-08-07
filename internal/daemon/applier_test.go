@@ -23,7 +23,7 @@ type applierFixture struct {
 func newApplierFixture(t *testing.T) applierFixture {
 	t.Helper()
 	rundir := t.TempDir()
-	configDir := "config.d"
+	configDir := "config"
 	cfg := applierFixture{
 		rundir:    rundir,
 		configDir: configDir,

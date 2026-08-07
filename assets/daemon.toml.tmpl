@@ -5,7 +5,7 @@
 [runtime]
 # rundir = "/opt/home/sing-router"   # 默认 = -D 参数 / 启动 cwd
 sing_box_binary = "bin/sing-box"
-config_dir      = "config.d"
+config_dir      = "config"
 ui_dir          = "ui"
 
 [http]
@@ -72,7 +72,7 @@ ref  = "main"
 path = "config.json"
 
 # rule_set 处理：dns.json 不再自带 rule_set 定义，daemon 启动时 EnsureRequiredRuleSets
-# 会按需把缺失的 tag 写到 config.d/rule-set.json，URL 直接是 https://gitee.com/...
+# 会按需把缺失的 tag 写到 config/rule-set.json，URL 直接是 https://gitee.com/...
 # （含 access_token），不走 proxy。用户的 zoo.raw.json 若已声明同名 tag 则优先生效。
 # ref 复用 [gitee.zoo].ref（默认 "main"）。
 

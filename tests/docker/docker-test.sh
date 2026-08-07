@@ -110,7 +110,7 @@ fi
 ex "sing-router install --yes --rundir /opt/home/sing-router ${token_flag}"
 
 ex 'test -f /opt/home/sing-router/daemon.toml'
-ex 'test -d /opt/home/sing-router/config.d'
+ex 'test -d /opt/home/sing-router/config'
 ex 'test -x /opt/etc/init.d/S99sing-router'
 ex 'test -x /koolshare/init.d/N99sing-router.sh'
 
@@ -165,8 +165,8 @@ step "Phase E  daemon start/stop via init.d (under ash)"
 # `lookup <域名>` 超时 → remote rule_set 初始化失败 → FATAL、daemon 起不来。
 # 真机家庭宽带 h3 可用，故不改嵌入默认配置；只把测试容器内已落地的 dns.json
 # 就地改成 https（DoH over TCP/443），绕开容器对 QUIC 的限制。
-ex 'sed -i "s/\"type\": \"h3\"/\"type\": \"https\"/g" /opt/home/sing-router/config.d/dns.json'
-ex '! grep -q "\"type\": \"h3\"" /opt/home/sing-router/config.d/dns.json'
+ex 'sed -i "s/\"type\": \"h3\"/\"type\": \"https\"/g" /opt/home/sing-router/config/dns.json'
+ex '! grep -q "\"type\": \"h3\"" /opt/home/sing-router/config/dns.json'
 
 ex '/opt/etc/init.d/S99sing-router start'
 
@@ -210,22 +210,22 @@ else
 fi
 
 # ------------------------------------------------------------------ Phase F-pre
-# 真 sing-box 路径下，verify zoo.raw.json 已被 daemon 预处理写入 config.d/zoo.json。
+# 真 sing-box 路径下，verify zoo.raw.json 已被 daemon 预处理写入 config/zoo.json。
 # 种子 zoo.json 只有 1 个 outbound（"主"/默认 → DIRECT 选择器）；预处理后必须包含
 # 用户 gitee 仓库 config.json 中的 outbound 列表，所以数量 > 1。
 if [ "$sing_box_source" = "real (gitee download)" ]; then
-    step "Phase F-pre  zoo preprocess (var/zoo.raw.json → config.d/zoo.json)"
+    step "Phase F-pre  zoo preprocess (var/zoo.raw.json → config/zoo.json)"
     ex 'test -s /opt/home/sing-router/var/zoo.raw.json'
-    ex 'test -s /opt/home/sing-router/config.d/zoo.json'
+    ex 'test -s /opt/home/sing-router/config/zoo.json'
     # 处理后 outbounds 数量 > 1（种子只有 1 个）
-    ex 'test "$(jq ".outbounds | length" /opt/home/sing-router/config.d/zoo.json)" -gt 1'
+    ex 'test "$(jq ".outbounds | length" /opt/home/sing-router/config/zoo.json)" -gt 1'
     # rule_set 也应该被处理后保留（种子无 rule_set）
-    ex 'test "$(jq ".route.rule_set | length // 0" /opt/home/sing-router/config.d/zoo.json)" -ge 0'
-    ex 'echo "config.d/zoo.json size: $(wc -c < /opt/home/sing-router/config.d/zoo.json) bytes; outbounds: $(jq ".outbounds | length" /opt/home/sing-router/config.d/zoo.json)"'
+    ex 'test "$(jq ".route.rule_set | length // 0" /opt/home/sing-router/config/zoo.json)" -ge 0'
+    ex 'echo "config/zoo.json size: $(wc -c < /opt/home/sing-router/config/zoo.json) bytes; outbounds: $(jq ".outbounds | length" /opt/home/sing-router/config/zoo.json)"'
     # rule-set.json 是 EnsureRequiredRuleSets 的产物：用户 zoo 已 cover 全部 required tag → 不存在；
     # 缺了哪个 → 存在并补齐。两种情况都正常。
-    ex 'if [ -f /opt/home/sing-router/config.d/rule-set.json ]; then \
-            echo "rule-set.json: $(jq -r "[.route.rule_set[].tag] | join(\",\")" /opt/home/sing-router/config.d/rule-set.json)"; \
+    ex 'if [ -f /opt/home/sing-router/config/rule-set.json ]; then \
+            echo "rule-set.json: $(jq -r "[.route.rule_set[].tag] | join(\",\")" /opt/home/sing-router/config/rule-set.json)"; \
         else \
             echo "rule-set.json: absent (user zoo provides all required tags)"; \
         fi'

@@ -73,7 +73,7 @@ func runDoctorChecks(rundir string, opts doctorOpts) []doctorCheck {
 	if !opts.rulesOnly {
 		out = append(out, checkExistsExec("/opt/sbin/sing-router"))
 		out = append(out, checkDirExists(rundir, "rundir"))
-		for _, sub := range []string{"config.d", "bin", "var", "run", "log"} {
+		for _, sub := range []string{"config", "bin", "var", "run", "log"} {
 			out = append(out, checkDirExists(filepath.Join(rundir, sub), "rundir/"+sub))
 		}
 		out = append(out, checkExistsExec(filepath.Join(rundir, "bin", "sing-box")))
@@ -81,7 +81,7 @@ func runDoctorChecks(rundir string, opts doctorOpts) []doctorCheck {
 		// 漂移：inline.json（定义 dns.json 引用的 LocalDomain）与 tun.json（tun-in，
 		// startup.sh 的 utun 路由依赖它）都是缺了就起不来的文件，却曾不在清单里。
 		if frags, err := install.EmbeddedConfigFragments(); err != nil {
-			out = append(out, doctorCheck{Name: "config.d/*", Status: "warn", Detail: err.Error()})
+			out = append(out, doctorCheck{Name: "config/*", Status: "warn", Detail: err.Error()})
 		} else {
 			for _, rel := range frags {
 				out = append(out, checkExistsAs(filepath.Join(rundir, filepath.FromSlash(rel)), rel, "fail"))
@@ -103,7 +103,7 @@ func runDoctorChecks(rundir string, opts doctorOpts) []doctorCheck {
 		}
 
 		// dns.json inet4_range consistency
-		dnsPath := filepath.Join(rundir, "config.d", "dns.json")
+		dnsPath := filepath.Join(rundir, "config", "dns.json")
 		if fileExists(dnsPath) {
 			data, _ := os.ReadFile(dnsPath)
 			if strings.Contains(string(data), `"inet4_range": "22.0.0.0/8"`) {
@@ -113,7 +113,7 @@ func runDoctorChecks(rundir string, opts doctorOpts) []doctorCheck {
 			}
 		}
 		// log.timestamp = true
-		logPath := filepath.Join(rundir, "config.d", "log.json")
+		logPath := filepath.Join(rundir, "config", "log.json")
 		if fileExists(logPath) {
 			data, _ := os.ReadFile(logPath)
 			if strings.Contains(string(data), `"timestamp": true`) {

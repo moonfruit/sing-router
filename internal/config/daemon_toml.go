@@ -256,7 +256,7 @@ func defaultConfig() *DaemonConfig {
 	cfg := &DaemonConfig{
 		Runtime: RuntimeConfig{
 			SingBoxBinary: "bin/sing-box",
-			ConfigDir:     "config.d",
+			ConfigDir:     "config",
 			UIDir:         "ui",
 		},
 		HTTP: HTTPConfig{Listen: "127.0.0.1:9998"},
@@ -306,7 +306,7 @@ func applyDefaults(cfg *DaemonConfig) {
 		cfg.Runtime.SingBoxBinary = "bin/sing-box"
 	}
 	if cfg.Runtime.ConfigDir == "" {
-		cfg.Runtime.ConfigDir = "config.d"
+		cfg.Runtime.ConfigDir = "config"
 	}
 	if cfg.Runtime.UIDir == "" {
 		cfg.Runtime.UIDir = "ui"

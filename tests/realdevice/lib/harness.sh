@@ -242,7 +242,7 @@ crashloop_to_fatal() {
 
 # _rd_zoo_products : echo zoo apply 会重写的全部产物（相对 RUNDIR）。用例改了
 #   var/zoo.raw.json 触发 apply 后，必须把这几个一起还原 —— 只还原 raw 的话，
-#   残留的 config.d/zoo.json 漂移会让下一个用例的 apply 误判为有变化而重启。
+#   残留的 config/zoo.json 漂移会让下一个用例的 apply 误判为有变化而重启。
 #   写成函数（而非顶层变量），避免 source 时就引用 config.sh 才有的 CONFIG_DIR。
 _rd_zoo_products() {
     echo "var/zoo.raw.json $CONFIG_DIR/zoo.json $CONFIG_DIR/rule-set.json"

@@ -57,28 +57,28 @@ func followBinarySeeds() ([]string, error) {
 	return out, nil
 }
 
-// EmbeddedConfigFragments 列出内嵌 config.d/ 下的全部文件（"config.d/xxx" 形式，
+// EmbeddedConfigFragments 列出内嵌 config/ 下的全部文件（"config/xxx" 形式，
 // 已排序）。这里刻意不写死清单——历史上手工维护的白名单曾漏掉新增 fragment，
-// 导致 install 后 config.d 缺文件、sing-box 因引用不到 rule_set 直接拒绝启动。
-// assets/config.d 与 $RUNDIR/config.d 是一一对应关系，全量拷贝即正确行为。
+// 导致 install 后 config 缺文件、sing-box 因引用不到 rule_set 直接拒绝启动。
+// assets/config 与 $RUNDIR/config 是一一对应关系，全量拷贝即正确行为。
 func EmbeddedConfigFragments() ([]string, error) {
-	entries, err := fs.ReadDir(assets.FS(), "config.d")
+	entries, err := fs.ReadDir(assets.FS(), "config")
 	if err != nil {
-		return nil, fmt.Errorf("list embedded config.d: %w", err)
+		return nil, fmt.Errorf("list embedded config: %w", err)
 	}
 	out := make([]string, 0, len(entries))
 	for _, e := range entries {
 		if e.IsDir() {
 			continue
 		}
-		out = append(out, "config.d/"+e.Name())
+		out = append(out, "config/"+e.Name())
 	}
 	sort.Strings(out)
 	return out, nil
 }
 
 // SeedDefaults 把内嵌资源拷到 rundir：
-//   - config.d/*.json + daemon.toml 走 writeDefaultAndSeed：xxx 仅在不存在时落
+//   - config/*.json + daemon.toml 走 writeDefaultAndSeed：xxx 仅在不存在时落
 //     盘（保护用户编辑，同时首装让 daemon 能直接起）；只有当 xxx 已存在且与
 //     新内容不一致时才写 xxx.default 供用户 diff/合并，等价或缺失时不产生
 //     冗余 .default 文件

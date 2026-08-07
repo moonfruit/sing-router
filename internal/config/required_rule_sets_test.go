@@ -17,7 +17,7 @@ func fakeRawURL(ref, path string) string {
 
 func TestEnsureRequiredRuleSets_RemoteWhenToken(t *testing.T) {
 	rd := t.TempDir()
-	cfgDir := filepath.Join(rd, "config.d")
+	cfgDir := filepath.Join(rd, "config")
 	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -26,7 +26,7 @@ func TestEnsureRequiredRuleSets_RemoteWhenToken(t *testing.T) {
 		t.Fatal(err)
 	}
 	required := []RuleSetSource{{Tag: "GeoIP@CN", GiteePath: "rules/geoip-cn.srs", LocalRelPath: "var/rules/geoip-cn.srs"}}
-	added, err := EnsureRequiredRuleSets(rd, "config.d", fakeRawURL, "main", required)
+	added, err := EnsureRequiredRuleSets(rd, "config", fakeRawURL, "main", required)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,7 +54,7 @@ func TestEnsureRequiredRuleSets_RemoteWhenToken(t *testing.T) {
 
 func TestEnsureRequiredRuleSets_LocalFallbackWhenNoToken(t *testing.T) {
 	rd := t.TempDir()
-	cfgDir := filepath.Join(rd, "config.d")
+	cfgDir := filepath.Join(rd, "config")
 	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +62,7 @@ func TestEnsureRequiredRuleSets_LocalFallbackWhenNoToken(t *testing.T) {
 		{Tag: "GeoIP@CN", GiteePath: "rules/geoip-cn.srs", LocalRelPath: "var/rules/geoip-cn.srs"},
 		{Tag: "Lan", GiteePath: "rules/lan.srs", LocalRelPath: "var/rules/lan.srs"},
 	}
-	added, err := EnsureRequiredRuleSets(rd, "config.d", nil, "main", required)
+	added, err := EnsureRequiredRuleSets(rd, "config", nil, "main", required)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +90,7 @@ func TestEnsureRequiredRuleSets_LocalFallbackWhenNoToken(t *testing.T) {
 
 func TestEnsureRequiredRuleSets_SkipsWhenProvidedByZoo(t *testing.T) {
 	rd := t.TempDir()
-	cfgDir := filepath.Join(rd, "config.d")
+	cfgDir := filepath.Join(rd, "config")
 	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -100,7 +100,7 @@ func TestEnsureRequiredRuleSets_SkipsWhenProvidedByZoo(t *testing.T) {
 		t.Fatal(err)
 	}
 	required := []RuleSetSource{{Tag: "GeoIP@CN", GiteePath: "rules/geoip-cn.srs"}}
-	added, err := EnsureRequiredRuleSets(rd, "config.d", fakeRawURL, "main", required)
+	added, err := EnsureRequiredRuleSets(rd, "config", fakeRawURL, "main", required)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +114,7 @@ func TestEnsureRequiredRuleSets_SkipsWhenProvidedByZoo(t *testing.T) {
 
 func TestEnsureRequiredRuleSets_RemovesStaleFragmentWhenAllProvided(t *testing.T) {
 	rd := t.TempDir()
-	cfgDir := filepath.Join(rd, "config.d")
+	cfgDir := filepath.Join(rd, "config")
 	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +129,7 @@ func TestEnsureRequiredRuleSets_RemovesStaleFragmentWhenAllProvided(t *testing.T
 		t.Fatal(err)
 	}
 	required := []RuleSetSource{{Tag: "Lan", GiteePath: "rules/lan.srs"}}
-	if _, err := EnsureRequiredRuleSets(rd, "config.d", fakeRawURL, "main", required); err != nil {
+	if _, err := EnsureRequiredRuleSets(rd, "config", fakeRawURL, "main", required); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(cfgDir, SupplementalRuleSetFile)); !os.IsNotExist(err) {
@@ -139,11 +139,11 @@ func TestEnsureRequiredRuleSets_RemovesStaleFragmentWhenAllProvided(t *testing.T
 
 func TestEnsureRequiredRuleSets_EmptyRequiredIsNoOp(t *testing.T) {
 	rd := t.TempDir()
-	cfgDir := filepath.Join(rd, "config.d")
+	cfgDir := filepath.Join(rd, "config")
 	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	added, err := EnsureRequiredRuleSets(rd, "config.d", fakeRawURL, "main", nil)
+	added, err := EnsureRequiredRuleSets(rd, "config", fakeRawURL, "main", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +164,7 @@ func TestEnsureRequiredRuleSets_EmptyRequiredIsNoOp(t *testing.T) {
 // 挪进新增的 inline.json，但 install 的 fragment 白名单没同步 → 装机后 inline.json
 // 缺失 → sing-box 拒绝启动。
 func TestEmbeddedFragmentsRuleSetsAllResolvable(t *testing.T) {
-	entries, err := fs.ReadDir(assets.FS(), "config.d")
+	entries, err := fs.ReadDir(assets.FS(), "config")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,13 +176,13 @@ func TestEmbeddedFragmentsRuleSetsAllResolvable(t *testing.T) {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
 			continue
 		}
-		data, err := assets.ReadFile("config.d/" + e.Name())
+		data, err := assets.ReadFile("config/" + e.Name())
 		if err != nil {
 			t.Fatal(err)
 		}
 		var doc any
 		if err := json.Unmarshal(stripJSONCLineComments(data), &doc); err != nil {
-			t.Fatalf("config.d/%s 不是合法 JSON(C): %v", e.Name(), err)
+			t.Fatalf("config/%s 不是合法 JSON(C): %v", e.Name(), err)
 		}
 		for _, tag := range collectRuleSetTags(doc, "tag", "rule_set") {
 			defined[tag] = true
@@ -203,7 +203,7 @@ func TestEmbeddedFragmentsRuleSetsAllResolvable(t *testing.T) {
 		if defined[tag] || required[tag] {
 			continue
 		}
-		t.Errorf("config.d/%s 引用了 rule_set %q，但没有任何 fragment 定义它，"+
+		t.Errorf("config/%s 引用了 rule_set %q，但没有任何 fragment 定义它，"+
 			"DefaultRequiredRuleSets 里也没有——sing-box 会拒绝启动", file, tag)
 	}
 

@@ -9,7 +9,7 @@ import (
 const sampleTOML = `
 [runtime]
 sing_box_binary = "bin/sing-box"
-config_dir      = "config.d"
+config_dir      = "config"
 ui_dir          = "ui"
 
 [http]

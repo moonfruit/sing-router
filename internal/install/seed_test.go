@@ -280,7 +280,7 @@ func TestSeedDefaults_FirstInstallWritesSeedOnly(t *testing.T) {
 // xxx 已存在且与嵌入内容一致：不写 xxx.default，避免产生冗余文件。
 func TestWriteDefaultAndSeed_NoDefaultWhenSeedAlreadyMatches(t *testing.T) {
 	rundir := t.TempDir()
-	dst := "config.d/foo.json"
+	dst := "config/foo.json"
 	full := filepath.Join(rundir, dst)
 	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
 		t.Fatal(err)
@@ -305,7 +305,7 @@ func TestWriteDefaultAndSeed_NoDefaultWhenSeedAlreadyMatches(t *testing.T) {
 // xxx 已存在但内容与嵌入不同：保留 xxx（用户编辑），把新内容覆盖到 xxx.default。
 func TestWriteDefaultAndSeed_WritesDefaultOnDivergence(t *testing.T) {
 	rundir := t.TempDir()
-	dst := "config.d/foo.json"
+	dst := "config/foo.json"
 	full := filepath.Join(rundir, dst)
 	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
 		t.Fatal(err)
@@ -396,8 +396,8 @@ func TestSeedDefaults_DaemonTomlRenderedCompare_DefaultEqualsNewRender(t *testin
 // xxx 不存在：写 xxx，不写 xxx.default。
 func TestWriteDefaultAndSeed_FirstInstallSkipsDefault(t *testing.T) {
 	rundir := t.TempDir()
-	dst := "config.d/foo.json"
-	if err := os.MkdirAll(filepath.Join(rundir, "config.d"), 0o755); err != nil {
+	dst := "config/foo.json"
+	if err := os.MkdirAll(filepath.Join(rundir, "config"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := writeDefaultAndSeed(rundir, dst, func() ([]byte, error) {
@@ -418,12 +418,12 @@ func TestWriteDefaultAndSeed_FirstInstallSkipsDefault(t *testing.T) {
 	}
 }
 
-// 回归守护：assets/config.d 下的每个文件都必须被 SeedDefaults 落到
-// $RUNDIR/config.d。这里刻意不复用 EmbeddedConfigFragments()，而是自己走一遍
+// 回归守护：assets/config 下的每个文件都必须被 SeedDefaults 落到
+// $RUNDIR/config。这里刻意不复用 EmbeddedConfigFragments()，而是自己走一遍
 // 内嵌 FS——否则一旦有人把 seed 逻辑改回手工白名单，测试会跟着一起漏。
 //
 // 历史事故：dns.json 新引用的 rule_set 定义在新增的 inline.json 里，但手工白名单
-// 没加它 → 装机后 config.d 缺 inline.json → sing-box 报 rule-set not found 拒绝启动；
+// 没加它 → 装机后 config 缺 inline.json → sing-box 报 rule-set not found 拒绝启动；
 // 同一次 tun.json 也漏了 → tun-in 入站整个消失，startup.sh 的 utun 路由随之失效。
 func TestSeedDefaults_CoversEveryEmbeddedConfigFragment(t *testing.T) {
 	dir := t.TempDir()
@@ -434,28 +434,28 @@ func TestSeedDefaults_CoversEveryEmbeddedConfigFragment(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	entries, err := fs.ReadDir(assets.FS(), "config.d")
+	entries, err := fs.ReadDir(assets.FS(), "config")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(entries) == 0 {
-		t.Fatal("内嵌 config.d 为空，测试失去意义")
+		t.Fatal("内嵌 config 为空，测试失去意义")
 	}
 	for _, e := range entries {
 		if e.IsDir() {
 			continue
 		}
-		want, err := assets.ReadFile("config.d/" + e.Name())
+		want, err := assets.ReadFile("config/" + e.Name())
 		if err != nil {
 			t.Fatal(err)
 		}
-		got, err := os.ReadFile(filepath.Join(dir, "config.d", e.Name()))
+		got, err := os.ReadFile(filepath.Join(dir, "config", e.Name()))
 		if err != nil {
-			t.Errorf("config.d/%s 没有被 seed 到 rundir: %v", e.Name(), err)
+			t.Errorf("config/%s 没有被 seed 到 rundir: %v", e.Name(), err)
 			continue
 		}
 		if !bytes.Equal(got, want) {
-			t.Errorf("config.d/%s 落盘内容与内嵌不一致", e.Name())
+			t.Errorf("config/%s 落盘内容与内嵌不一致", e.Name())
 		}
 	}
 }

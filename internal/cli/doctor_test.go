@@ -10,7 +10,7 @@ import (
 	"github.com/moonfruit/sing-router/internal/firmware"
 )
 
-// 回归守护：doctor 必须对每一个内嵌 config.d fragment 都出一条 fail 级检查。
+// 回归守护：doctor 必须对每一个内嵌 config fragment 都出一条 fail 级检查。
 // 这里刻意走内嵌 FS 自己列一遍，而不是复用 install.EmbeddedConfigFragments()——
 // 否则有人把 doctor 改回手工清单时，测试会跟着一起漏。
 //
@@ -24,18 +24,18 @@ func TestDoctorChecksEveryEmbeddedConfigFragment(t *testing.T) {
 		seen[c.Name] = c.Status
 	}
 
-	entries, err := fs.ReadDir(assets.FS(), "config.d")
+	entries, err := fs.ReadDir(assets.FS(), "config")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(entries) == 0 {
-		t.Fatal("内嵌 config.d 为空，测试失去意义")
+		t.Fatal("内嵌 config 为空，测试失去意义")
 	}
 	for _, e := range entries {
 		if e.IsDir() {
 			continue
 		}
-		name := "config.d/" + e.Name()
+		name := "config/" + e.Name()
 		status, ok := seen[name]
 		if !ok {
 			t.Errorf("doctor 没有检查 %s（缺了它 sing-box 起不来，doctor 却报不出）", name)
@@ -48,10 +48,10 @@ func TestDoctorChecksEveryEmbeddedConfigFragment(t *testing.T) {
 	}
 }
 
-// doctor 的 config.d 检查名必须是稳定的 "config.d/xxx" 形式（JSON 输出的键）。
+// doctor 的 config 检查名必须是稳定的 "config/xxx" 形式（JSON 输出的键）。
 func TestDoctorConfigCheckNamesUseSlashPath(t *testing.T) {
 	for _, c := range runDoctorChecks(t.TempDir(), doctorOpts{skipRouting: true}) {
-		if strings.HasPrefix(c.Name, "config.d") && strings.Contains(c.Name, "\\") {
+		if strings.HasPrefix(c.Name, "config") && strings.Contains(c.Name, "\\") {
 			t.Errorf("check name %q 含反斜杠，应统一用 / 分隔", c.Name)
 		}
 	}

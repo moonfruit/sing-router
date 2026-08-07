@@ -58,7 +58,7 @@ func (e *PreprocessError) Error() string {
 func (e *PreprocessError) Unwrap() error { return e.Err }
 
 // Preprocess 对 zoo.raw.json 的字节做白名单过滤、outbound 撞名校验，
-// 返回最终可写入 config.d/zoo.json 的字节。route.rule_set 直接透传——dns.json
+// 返回最终可写入 config/zoo.json 的字节。route.rule_set 直接透传——dns.json
 // 不再自带 rule_set 定义，rule_set 集合由用户 zoo + EnsureRequiredRuleSets 兜底，
 // 不在这里 dedup。
 func Preprocess(in PreprocessInput) (*PreprocessResult, error) {

@@ -15,7 +15,7 @@
       { "tag": "dns-cloudflare", "type": "h3", "server": "cloudflare-dns.com", "detour": "🔰 默认出口" },
       { "tag": "dns-proxy", "type": "group", "servers": ["dns-one", "dns-cloudflare"] },
       // Hosts
-      { "tag": "dns-hosts", "type": "hosts", "path": ["config.d/hosts", "/etc/hosts"] },
+      { "tag": "dns-hosts", "type": "hosts", "path": ["config/hosts", "/etc/hosts"] },
       // Local
       { "tag": "dns-local", "type": "local", "neighbor_domain": [".lan", ".home.arpa"] },
       // FakeIP

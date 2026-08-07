@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 项目概述
 
-`sing-router` 是部署在华硕路由器 (Merlin / Koolshare + Entware) 上的 sing-box 透明代理"管理器"：负责 install / supervisor / 资源同步 / iptables 编排 / 健康体检，与 sing-box 二进制本身解耦。模块路径：`github.com/moonfruit/sing-router`，Go 1.26.2。所有静态资源（默认 config.d、init.d、firmware 钩子、shell 脚本、daemon.toml 模板、rule_set 内嵌兜底）通过 `//go:embed` 打进单一 ARM64 二进制，运行时无外部依赖。
+`sing-router` 是部署在华硕路由器 (Merlin / Koolshare + Entware) 上的 sing-box 透明代理"管理器"：负责 install / supervisor / 资源同步 / iptables 编排 / 健康体检，与 sing-box 二进制本身解耦。模块路径：`github.com/moonfruit/sing-router`，Go 1.26.2。所有静态资源（默认 config、init.d、firmware 钩子、shell 脚本、daemon.toml 模板、rule_set 内嵌兜底）通过 `//go:embed` 打进单一 ARM64 二进制，运行时无外部依赖。
 
 依赖的 sibling 模块 `github.com/moonfruit/sing2seq`（位于 `/Users/moon/Workspace.localized/go/mod/sing2seq`，已在 `.claude/settings.local.json` 中作为 additionalDirectory 开放）提供 `clef` 包（事件总线 + Emitter，日志/事件管道）。
 
@@ -58,7 +58,7 @@ docs/superpowers/{specs,plans}/  # 设计稿与实施计划（按阶段 module-a
        ├─ EmitterStack: Bus + Emitter + Writer(log/sing-router.log, rotate+gzip)
        ├─ HTTP listener 127.0.0.1:9998  (/api/v1/{status,start,stop,restart,check,apply,
        │     logs,script/,shutdown})  ← /apply 支持 ?resource=sing-box|zoo|cn|all
-       ├─ Supervisor: sing-box 子进程 (bin/sing-box run -D $RUNDIR -C config.d)
+       ├─ Supervisor: sing-box 子进程 (bin/sing-box run -D $RUNDIR -C config)
        │     └─ Shutdown / Startup / Restart 三段式（详见「重启路径统一」段）；
        │        Ready check：TCP dial 127.0.0.1:7890 (mixed-in) + clash API /version；
        │        子进程崩溃 → 立即 Shutdown 拆 iptables → 退避（BackoffMs ladder）→ Startup
@@ -81,7 +81,7 @@ docs/superpowers/{specs,plans}/  # 设计稿与实施计划（按阶段 module-a
 各 caller 全部走这三个入口：CLI `start/stop/restart` → `Startup/Shutdown/Restart`；崩溃恢复 → `Shutdown → Sleep(backoff) → Startup`；`WatchRoutes` 探测路由缺失 → `Restart`；Applier 4 阶段最后一步 → `Restart`/`RestartForce`。**没有独立的 `reapply-rules` / `reload-cn-ipset` 端点或子命令**；固件钩子调 `sing-router restart`；shell `reapply-routes.sh` / `reload-cn-ipset.sh` 已删除。
 
 ### sing-box 自连导致 CPU 100%（修复见 `c26da8a`, `03bf465`）
-Ready check 只允许 dial **mixed-in** 端口（`readyCheckDialMixedPort = 7890`，与 `assets/config.d/inbounds.json` 必须一致）。`dns-in (1053)` 与 `redirect-in (7892)` 是 transparent inbound：本机 dial 会触发 SO_ORIGINAL_DST → 命中 `ip_is_private→DIRECT` → outbound 又 dial 回同一端口 → 无限自繁殖。`buildSupervisorWiring` 默认即此行为，daemon.toml 的 `[supervisor].ready_check_dial_inbounds` 控制开关。改 inbounds.json 时**同步改 `internal/cli/wireup_daemon.go` 里的常量**。
+Ready check 只允许 dial **mixed-in** 端口（`readyCheckDialMixedPort = 7890`，与 `assets/config/inbounds.json` 必须一致）。`dns-in (1053)` 与 `redirect-in (7892)` 是 transparent inbound：本机 dial 会触发 SO_ORIGINAL_DST → 命中 `ip_is_private→DIRECT` → outbound 又 dial 回同一端口 → 无限自繁殖。`buildSupervisorWiring` 默认即此行为，daemon.toml 的 `[supervisor].ready_check_dial_inbounds` 控制开关。改 inbounds.json 时**同步改 `internal/cli/wireup_daemon.go` 里的常量**。
 
 ### Ready check 默认 60s 总超时
 sing-box 冷启要做 cache-file 加载 + rule-set 下载 + router 启动，整体可达 30s+。默认 `TotalTimeout=60s` 是经过验证的下限，缩短前考虑这一点。
@@ -97,9 +97,9 @@ sha256 真变化闸门保留（"是否触发 Restart"的判断）：gitee 上游
 失败语义（all-or-nothing）：CheckConfig 失败 → 整轮放弃 commit；Restart 失败 → revert 全部已 commit 的资源 → `RestartForce` 绕节流把旧配置拉回来。
 
 ### zoo 预处理是"种子 → 用户配置 → 自动补 rule_set"链
-1. install 时把 `assets/config.d/zoo.json` 当种子写入 `config.d/zoo.json`（仅 1 个 outbound）。
-2. daemon 启动时若 `var/zoo.raw.json` 存在（由 sync 拉自 gitee `config.json`），`config.PreprocessZooFile` 按白名单提取 `outbounds` + `route.{rules,rule_set,final}` 写入 `config.d/zoo.json`；缺失即跳过（保留上次成功的 zoo.json）。
-3. `config.EnsureRequiredRuleSets` 根据 `DefaultRequiredRuleSets` 检查所有引用的 rule_set tag，缺失的写入 `config.d/rule-set.json`：有 token → remote 条目（gitee raw URL，sing-box 自己 etag 拉取），无 token → local 条目指向 install 落到 `var/rules/` 的内嵌兜底。
+1. install 时把 `assets/config/zoo.json` 当种子写入 `config/zoo.json`（仅 1 个 outbound）。
+2. daemon 启动时若 `var/zoo.raw.json` 存在（由 sync 拉自 gitee `config.json`），`config.PreprocessZooFile` 按白名单提取 `outbounds` + `route.{rules,rule_set,final}` 写入 `config/zoo.json`；缺失即跳过（保留上次成功的 zoo.json）。
+3. `config.EnsureRequiredRuleSets` 根据 `DefaultRequiredRuleSets` 检查所有引用的 rule_set tag，缺失的写入 `config/rule-set.json`：有 token → remote 条目（gitee raw URL，sing-box 自己 etag 拉取），无 token → local 条目指向 install 落到 `var/rules/` 的内嵌兜底。
 
 ### install 默认不下载资源（参见 memory）
 `sing-router install` 首次安装默认 `download_sing_box=false` / `download_cn_list=false`，仅当 CLI 显式传 `--download-sing-box` 等 flag 时下载。Docker 集成测试无 token 时落到 fake-sing-box（`testdata/fake-sing-box`）。
@@ -112,7 +112,7 @@ sha256 真变化闸门保留（"是否触发 Restart"的判断）：gitee 上游
 
 ## 配置与凭证
 
-`daemon.toml` 与 `config.d/*.json` 的安装语义见 `internal/install/seed.go::writeDefaultAndSeed`：三态——`xxx` 不存在则写 `xxx`、不产生 `.default`（首装让 daemon 直接能起）；`xxx` 已存在且内容与新嵌入一致则什么都不做；只有 `xxx` 已存在且与新嵌入不一致时，保留用户编辑的 `xxx`、把新内容覆盖写到 `xxx.default` 作为 diff/合并基准。模板见 `assets/daemon.toml.tmpl` / `assets/config.d/`。注：`assets/` 下的目录布局与 `$RUNDIR` 一一对应（`config.d/`、`var/cn.txt`、`var/rules/*.srs`），仅 `firmware/` 与 `initd/` 是不落 rundir 的安装工件。关键节：
+`daemon.toml` 与 `config/*.json` 的安装语义见 `internal/install/seed.go::writeDefaultAndSeed`：三态——`xxx` 不存在则写 `xxx`、不产生 `.default`（首装让 daemon 直接能起）；`xxx` 已存在且内容与新嵌入一致则什么都不做；只有 `xxx` 已存在且与新嵌入不一致时，保留用户编辑的 `xxx`、把新内容覆盖写到 `xxx.default` 作为 diff/合并基准。模板见 `assets/daemon.toml.tmpl` / `assets/config/`。注：`assets/` 下的目录布局与 `$RUNDIR` 一一对应（`config/`、`var/cn.txt`、`var/rules/*.srs`），仅 `firmware/` 与 `initd/` 是不落 rundir 的安装工件。关键节：
 - `[runtime]`：`sing_box_binary` / `config_dir` / `ui_dir` 都相对 `$RUNDIR`
 - `[supervisor]`：ready check / backoff ladder / stop grace
 - `[gitee]` + `[gitee.sing_box]` + `[gitee.zoo]`：私仓 token + ref + 文件路径

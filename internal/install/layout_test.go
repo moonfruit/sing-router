@@ -12,7 +12,7 @@ func TestEnsureLayoutCreatesAllDirs(t *testing.T) {
 	if err := EnsureLayout(rundir); err != nil {
 		t.Fatal(err)
 	}
-	for _, sub := range []string{"config.d", "bin", "var", "run", "log"} {
+	for _, sub := range []string{"config", "bin", "var", "run", "log"} {
 		if info, err := os.Stat(filepath.Join(rundir, sub)); err != nil || !info.IsDir() {
 			t.Errorf("missing dir %s: %v", sub, err)
 		}

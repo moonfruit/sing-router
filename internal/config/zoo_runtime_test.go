@@ -44,18 +44,18 @@ const builtinDNSJSON = `{
 func writeRundir(t *testing.T) string {
 	t.Helper()
 	rd := t.TempDir()
-	for _, d := range []string{"var", "config.d"} {
+	for _, d := range []string{"var", "config"} {
 		if err := os.MkdirAll(filepath.Join(rd, d), 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := os.WriteFile(filepath.Join(rd, "config.d", "zoo.json"), []byte(seedZooJSON), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(rd, "config", "zoo.json"), []byte(seedZooJSON), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(rd, "config.d", "outbounds.json"), []byte(builtinOutboundsJSON), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(rd, "config", "outbounds.json"), []byte(builtinOutboundsJSON), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(rd, "config.d", "dns.json"), []byte(builtinDNSJSON), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(rd, "config", "dns.json"), []byte(builtinDNSJSON), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	return rd
@@ -66,7 +66,7 @@ func TestPreprocessZooFile_ReplacesSeedWithUserContent(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(rd, "var", "zoo.raw.json"), []byte(userZooRawJSON), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	stats, err := PreprocessZooFile(rd, "config.d")
+	stats, err := PreprocessZooFile(rd, "config")
 	if err != nil {
 		t.Fatalf("PreprocessZooFile: %v", err)
 	}
@@ -76,12 +76,12 @@ func TestPreprocessZooFile_ReplacesSeedWithUserContent(t *testing.T) {
 	if stats.OutboundCount != 2 {
 		t.Errorf("OutboundCount = %d, want 2", stats.OutboundCount)
 	}
-	data, err := os.ReadFile(filepath.Join(rd, "config.d", "zoo.json"))
+	data, err := os.ReadFile(filepath.Join(rd, "config", "zoo.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if string(data) == seedZooJSON {
-		t.Fatal("config.d/zoo.json was not replaced")
+		t.Fatal("config/zoo.json was not replaced")
 	}
 	if !strings.Contains(string(data), "DIRECT-USER") {
 		t.Errorf("processed zoo.json missing user outbound DIRECT-USER:\n%s", data)
@@ -90,14 +90,14 @@ func TestPreprocessZooFile_ReplacesSeedWithUserContent(t *testing.T) {
 
 func TestPreprocessZooFile_NoRawFile_NoOp(t *testing.T) {
 	rd := writeRundir(t)
-	stats, err := PreprocessZooFile(rd, "config.d")
+	stats, err := PreprocessZooFile(rd, "config")
 	if err != nil {
 		t.Fatalf("PreprocessZooFile: %v", err)
 	}
 	if stats != nil {
 		t.Errorf("expected nil stats when raw missing, got %+v", stats)
 	}
-	data, err := os.ReadFile(filepath.Join(rd, "config.d", "zoo.json"))
+	data, err := os.ReadFile(filepath.Join(rd, "config", "zoo.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +113,7 @@ func TestPreprocessZooFile_BuiltinOutboundCollisionRejected(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(rd, "var", "zoo.raw.json"), []byte(colliding), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	_, err := PreprocessZooFile(rd, "config.d")
+	_, err := PreprocessZooFile(rd, "config")
 	if err == nil {
 		t.Fatal("expected collision error, got nil")
 	}
@@ -121,7 +121,7 @@ func TestPreprocessZooFile_BuiltinOutboundCollisionRejected(t *testing.T) {
 
 func TestScanBuiltinOutboundTags_PicksUpStaticFragments(t *testing.T) {
 	rd := writeRundir(t)
-	tags, err := scanBuiltinOutboundTags(filepath.Join(rd, "config.d"))
+	tags, err := scanBuiltinOutboundTags(filepath.Join(rd, "config"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,14 +153,14 @@ func TestPreprocessZooFile_RuleSetPassedThrough(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(rd, "var", "zoo.raw.json"), []byte(colliding), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	stats, err := PreprocessZooFile(rd, "config.d")
+	stats, err := PreprocessZooFile(rd, "config")
 	if err != nil {
 		t.Fatalf("PreprocessZooFile: %v", err)
 	}
 	if stats.RuleSetCount != 2 {
 		t.Errorf("RuleSetCount = %d, want 2 (both kept verbatim)", stats.RuleSetCount)
 	}
-	data, err := os.ReadFile(filepath.Join(rd, "config.d", "zoo.json"))
+	data, err := os.ReadFile(filepath.Join(rd, "config", "zoo.json"))
 	if err != nil {
 		t.Fatal(err)
 	}

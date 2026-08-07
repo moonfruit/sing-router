@@ -65,7 +65,7 @@ func newRestartCmd() *cobra.Command {
 }
 
 func newCheckCmd() *cobra.Command {
-	return postOnlyCmd{use: "check", short: "Validate config.d/* via sing-box check", path: "/api/v1/check"}.build()
+	return postOnlyCmd{use: "check", short: "Validate config/* via sing-box check", path: "/api/v1/check"}.build()
 }
 
 func newShutdownCmd() *cobra.Command {

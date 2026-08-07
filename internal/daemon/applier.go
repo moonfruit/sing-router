@@ -70,7 +70,7 @@ func ParseResource(s string) ([]Resource, error) {
 // sha256 闸门保证「上游 etag 假信号」不会触发 Restart——内容真变化才动手。
 type Applier struct {
 	Rundir    string
-	ConfigDir string // 相对 rundir，例如 "config.d"
+	ConfigDir string // 相对 rundir，例如 "config"
 
 	Emitter *clef.Emitter
 
@@ -80,11 +80,11 @@ type Applier struct {
 	// apply-state 会写入新 hash → 下次 sync 永远不会重试（彻底失效）。
 	Restart func(ctx context.Context) error
 
-	// CheckConfig 用新二进制 + 新 config.d 跑 `sing-box check`。
+	// CheckConfig 用新二进制 + 新 config 跑 `sing-box check`。
 	CheckConfig func(ctx context.Context) error
 
 	// PreprocessZoo 重新跑 PreprocessZooFile + EnsureRequiredRuleSets，把
-	// var/zoo.raw.json 翻译成 config.d/zoo.json 与 config.d/rule-set.json。
+	// var/zoo.raw.json 翻译成 config/zoo.json 与 config/rule-set.json。
 	// 通常在 wireup 时绑定 rawURL/ref/required 列表（避免 daemon 包反向依赖 config 包）。
 	PreprocessZoo func() error
 }
