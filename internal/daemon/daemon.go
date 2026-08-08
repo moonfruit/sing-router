@@ -27,6 +27,11 @@ type Options struct {
 	StatusExtra  func() map[string]any
 	ScriptByName func(name string) ([]byte, error)
 
+	// HTTPToken 是 [http].token；非 loopback 来源的鉴权凭据。
+	HTTPToken string
+	// Bypass 非 nil 且 Enabled 时启用 LAN 客户端 bypass 注册端点。
+	Bypass *BypassDeps
+
 	// ReopenLog 在收到 SIGHUP 时调用,用于 logrotate copytruncate 反向场景。
 	// 为 nil 时 SIGHUP 仅被吞掉(不让 Go runtime 走默认终止)。
 	ReopenLog func() error
@@ -70,7 +75,8 @@ func Run(ctx context.Context, opts Options) error {
 	if opts.Applier != nil {
 		deps.Apply = opts.Applier.Apply
 	}
-	mux := NewMux(deps)
+	deps.Bypass = opts.Bypass
+	handler := buildHTTPHandler(deps, opts.HTTPToken)
 
 	// 后台资源同步（gitee → bin/sing-box / var/zoo.raw.json / var/cn.txt）。
 	if opts.Updater != nil {
@@ -89,7 +95,7 @@ func Run(ctx context.Context, opts Options) error {
 				httpDone <- fmt.Errorf("panic: %v", r)
 			}
 		}()
-		httpDone <- ServeHTTP(ctx, mux, opts.Listen)
+		httpDone <- ServeHTTP(ctx, handler, opts.Listen)
 	}()
 
 	// 信号: TERM/INT → cancel ctx, HUP → reopen 日志(不退出), PIPE → 忽略

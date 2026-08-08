@@ -3,6 +3,8 @@ package cli
 import (
 	"bufio"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
@@ -35,6 +37,8 @@ func newInstallCmd() *cobra.Command {
 		debugOnly         bool
 		giteeToken        string
 		binaryPath        string
+		enableBypass      bool
+		httpToken         string
 	)
 	cmd := &cobra.Command{
 		Use:   "install",
@@ -46,7 +50,22 @@ func newInstallCmd() *cobra.Command {
 			if err := validateGiteeToken(giteeToken); err != nil {
 				return err
 			}
-			cfg, _ := config.LoadDaemonConfig(filepath.Join(rundir, "daemon.toml"))
+			// LoadDaemonConfig 的契约：daemon.toml 不存在 → 返回默认 cfg、nil error
+			// （首次 install 走的就是这条路径，daemon.toml 还没被渲染出来）；
+			// daemon.toml 存在但读取/解析失败 → 返回 (nil, err)。之前这里用 `_`
+			// 吞掉了 err，损坏的 daemon.toml（比如手工编辑写坏语法）会让 cfg 是
+			// nil，紧接着下面的 cfg.Install.* 解引用直接 panic，用户看到的是一段
+			// Go 堆栈而不是"配置文件哪里错了"。
+			//
+			// 这里选择报错退出而不是回退默认值继续：install 后续要读
+			// cfg.Install.DownloadSingBox / DownloadCNList / AutoStart / Firmware
+			// 来决定实际动作，配置损坏时静默用默认值等于无视用户已有设置、可能
+			// 做出与用户意图相反的操作（比如把已经关掉的 auto_start 又打开）。
+			// 让用户先修好配置文件更安全。
+			cfg, err := config.LoadDaemonConfig(filepath.Join(rundir, "daemon.toml"))
+			if err != nil {
+				return fmt.Errorf("read daemon.toml at %s: %w", filepath.Join(rundir, "daemon.toml"), err)
+			}
 			// CLI --gitee-token 视作 cfg 的运行时覆盖，与 SING_ROUTER_GITEE_TOKEN 同源。
 			// cfg 在 SeedDefaults 之前加载；首次 install 时 daemon.toml 尚未渲染，
 			// 缺这一步则 cfg.Gitee.Token 永远为空，下方的 token 校验与 syncpkg.NewUpdater
@@ -91,12 +110,28 @@ func newInstallCmd() *cobra.Command {
 			if err := run("ensure rundir layout", func() error { return install.EnsureLayout(rundir) }); err != nil {
 				return err
 			}
+			// bypass 的身份完全来自 token，没有 token 就不该启用。用户没给就
+			// 生成一个，并在结尾打印出来让他拷到客户端。
+			if enableBypass && httpToken == "" {
+				generated, err := generateHTTPToken()
+				if err != nil {
+					return fmt.Errorf("generate http token: %w", err)
+				}
+				httpToken = generated
+			}
+			httpListen := "127.0.0.1:9998"
+			if enableBypass {
+				httpListen = "0.0.0.0:9998"
+			}
 			vars := install.TemplateVars{
 				DownloadSingBox: downloadSingBox,
 				DownloadCNList:  downloadCNList,
 				AutoStart:       autoStart,
 				Firmware:        string(kind),
 				GiteeToken:      giteeToken,
+				HTTPListen:      httpListen,
+				HTTPToken:       httpToken,
+				BypassEnabled:   enableBypass,
 			}
 			if err := run("seed default config/* and render daemon.toml", func() error {
 				return install.SeedDefaults(rundir, vars)
@@ -186,6 +221,59 @@ func newInstallCmd() *cobra.Command {
 				}
 			}
 
+			switch {
+			case enableBypass && dryRun:
+				// dry-run 从没真正写过 daemon.toml（run() 在 dryRun 时跳过 fn()），
+				// 回读校验在这里必然是假阴性，所以单独给一条"预览"措辞，不去动
+				// 下面 committed 分支的真实校验逻辑。
+				fmt.Fprintf(cmd.OutOrStdout(),
+					"\n[dry-run] would enable LAN client bypass.\n  listen: %s\n  token:  %s\n",
+					httpListen, httpToken)
+			case enableBypass:
+				// writeDefaultAndSeed 是三态语义：daemon.toml 已存在且内容不同的机器
+				// 上，新内容只落到 daemon.toml.default，daemon.toml 原样不动——这是
+				// 真机的常见场景（早就装过 sing-router，现在想开 bypass）。回读刚写
+				// 完的 daemon.toml，确认 [bypass].enabled 与 [http].token 真的落地了
+				// 再打印"enabled"，否则用户会以为配置生效了，实际 LAN 客户端心跳会
+				// 拿到 connection refused，且完全看不出原因。
+				committed, verifyErr := bypassConfigCommitted(rundir, httpToken)
+				if verifyErr == nil && committed {
+					fmt.Fprintf(cmd.OutOrStdout(),
+						"\nLAN client bypass enabled.\n  listen: %s\n  token:  %s\n"+
+							"Copy this token into the client agent config (contrib/macos/bypass-agent.conf).\n"+
+							"Keep this token secret: don't paste it into a public issue, chat log, or CI output.\n",
+						httpListen, httpToken)
+				} else {
+					cfgPath := filepath.Join(rundir, "daemon.toml")
+					defaultPath := cfgPath + ".default"
+					fmt.Fprintf(cmd.OutOrStdout(),
+						"\nLAN client bypass is NOT active yet.\n"+
+							"%s already existed, so install left it untouched; the newly rendered\n"+
+							"config (with bypass enabled) was written to %s instead.\n"+
+							"To activate bypass, manually merge these three settings into your existing\n"+
+							"%s (then restart sing-router):\n"+
+							"  [bypass].enabled = true\n"+
+							"  [http].listen = %q\n"+
+							"  [http].token = %q\n"+
+							"(or diff %s against %s to merge by hand)\n"+
+							"Keep this token secret: don't paste it into a public issue, chat log, or CI output.\n",
+						cfgPath, defaultPath, cfgPath, httpListen, httpToken, defaultPath, cfgPath)
+					if verifyErr != nil {
+						fmt.Fprintf(cmd.OutOrStdout(),
+							"(could not verify %s: %v; treating as not activated)\n", cfgPath, verifyErr)
+					}
+				}
+			case httpToken != "":
+				// 没给 --enable-bypass，[bypass].enabled 恒为 false，AuthMiddleware
+				// 对非 loopback 请求一律 403、根本不看 token；[http].listen 也还是
+				// loopback，LAN 连不进来。所以这个 token 写进 daemon.toml 但完全不
+				// 生效——不提醒的话，用户会以为自己已经配好了。
+				fmt.Fprintln(cmd.OutOrStdout(),
+					"\nNote: --http-token was set but --enable-bypass was not, so this token "+
+						"will not take effect ([bypass] stays disabled and [http].listen stays on "+
+						"loopback). Re-run with --enable-bypass to actually open LAN bypass registration.")
+			}
+
 			fmt.Fprintln(cmd.OutOrStdout())
 			if debugOnly {
 				fmt.Fprintln(cmd.OutOrStdout(), "Debug seed complete. To run the daemon in the foreground:")
@@ -221,7 +309,38 @@ func newInstallCmd() *cobra.Command {
 		"Gitee private repo access token. On first install, written into [gitee].token of daemon.toml. "+
 			"On re-install, used as a runtime override for downloads in this command (daemon.toml is left untouched; "+
 			"edit it directly or set SING_ROUTER_GITEE_TOKEN to persist).")
+	cmd.Flags().BoolVar(&enableBypass, "enable-bypass", false,
+		"Enable LAN client bypass registration (opens [http].listen to 0.0.0.0 and requires a token)")
+	cmd.Flags().StringVar(&httpToken, "http-token", "",
+		"Token for LAN API auth; auto-generated when --enable-bypass is set and this is empty")
 	return cmd
+}
+
+// bypassConfigCommitted 回读刚写完的 daemon.toml，确认 [bypass].enabled 与
+// [http].token 真的按本次 install 的意图落地了。
+//
+// 之所以需要这一步：install.go 结尾之前无条件打印"LAN client bypass
+// enabled."横幅，但 SeedDefaults→writeDefaultAndSeed 是三态语义——daemon.toml
+// 已存在且内容不同（真机 100% 是这种场景：早装过 sing-router，现在想开
+// bypass）时只会把新内容写到 daemon.toml.default，daemon.toml 原样不动。不
+// 回读校验的话，用户会拿着一条"已生效"的横幅，去配一个连不上的客户端。
+//
+// 回读失败（文件读不到 / 解析错）时调用方按不一致处理，不静默。
+func bypassConfigCommitted(rundir, token string) (bool, error) {
+	cfg, err := config.LoadDaemonConfig(filepath.Join(rundir, "daemon.toml"))
+	if err != nil {
+		return false, err
+	}
+	return cfg.Bypass.Enabled && cfg.HTTP.Token == token, nil
+}
+
+// generateHTTPToken 生成 32 hex 字符（16 字节）的随机 token。
+func generateHTTPToken() (string, error) {
+	buf := make([]byte, 16)
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(buf), nil
 }
 
 // resolveInstallBinary picks the absolute path to bake into the nat-start

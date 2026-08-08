@@ -1,0 +1,21 @@
+# sing-router bypass agent 配置
+# 部署到 /etc/sing-router/bypass-agent.conf 并 chmod 600（含 token）。
+
+# 路由器 API 基址。daemon 强制 tcp4 监听，这里必须用 IPv4 地址。
+ROUTER_URL="http://192.168.50.1:9998"
+
+# [http].token 的值。install --enable-bypass 会在结尾打印出来。
+TOKEN="替换成 install 打印的 token"
+
+# 用于反查出口接口的网关地址；同时也是"是否在目标 LAN 上"的判据。
+GATEWAY="192.168.50.1"
+
+# 本机 sing-box 的 clash api，用于探活。
+LOCAL_CLASH_API="http://127.0.0.1:9999"
+
+# 申请的租约秒数，须 <= 路由器的 [bypass].max_ttl_sec。
+# 建议约为 launchd StartInterval 的 4 倍，留足重试余量。
+TTL="120"
+
+# 上次注册 IP 的记录，用于地址变化时立刻注销旧值。
+STATE_FILE="/var/run/sing-bypass-agent.ip"

@@ -3,6 +3,8 @@ package cli
 import (
 	"context"
 	"fmt"
+	"maps"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -175,11 +177,33 @@ func realRunDaemon(ctx context.Context, rundir string) error {
 			map[string]any{"Count": len(added), "Mode": mode, "Tags": added})
 	}
 
+	bypassCfg := config.LoadBypass(cfg)
+	if err := bypassCfg.Validate(cfg.HTTP.Token); err != nil {
+		return fmt.Errorf("bypass config: %w", err)
+	}
+	// 启用了却只监听 loopback：LAN 客户端根本连不上，但这不该阻止 daemon 启动。
+	if bypassCfg.Enabled && listenIsLoopback(cfg.HTTP.Listen) {
+		em.Warn("config", "bypass.listen_loopback",
+			"[bypass].enabled = true but [http].listen is {Listen}; LAN clients cannot register",
+			map[string]any{"Listen": cfg.HTTP.Listen})
+	}
+
+	bypassDeps := &daemon.BypassDeps{
+		Enabled:       bypassCfg.Enabled,
+		DefaultTTLSec: bypassCfg.DefaultTTLSec,
+		MaxTTLSec:     bypassCfg.MaxTTLSec,
+		Emitter:       em,
+	}
+	// 在 HTTP listener 起来之前把动态租约 set 建好（见 BypassDeps.EnsureSet 注释）：
+	// 否则 client_bypass 只由 startup.sh 创建，而 startup.sh 要等 ready check
+	// 走完（默认上限 60s）才跑，冷启动窗口内客户端心跳会全部拿到 500。
+	bypassDeps.EnsureSet(ctx)
+
 	routing := config.LoadRouting(cfg)
 	cnPath := filepath.Join(rundir, "var", "cn.txt")
 	runner := shell.NewRunner(shell.RunnerConfig{
 		Bash: "/bin/bash",
-		Env:  routing.EnvVars(cnPath),
+		Env:  mergedShellEnv(routing, bypassCfg, cnPath),
 	})
 	runner.OnStderr = func(line string) {
 		em.Info("shell", "shell.stderr", "{Line}", map[string]any{"Line": line})
@@ -299,6 +323,8 @@ func realRunDaemon(ctx context.Context, rundir string) error {
 		Updater:    updater,
 		Applier:    applier,
 		Notifier:   notifier,
+		HTTPToken:  cfg.HTTP.Token,
+		Bypass:     bypassDeps,
 		Sync: daemon.SyncLoopConfig{
 			IntervalSec:           cfg.Sync.SyncIntervalSeconds(),
 			OnStartDelaySec:       cfg.Sync.SyncOnStartDelaySec(),
@@ -391,4 +417,28 @@ func buildStatusExtra(rundir, configDir, firmwareKind string) func() map[string]
 			"firmware": firmwareKind,
 		}
 	}
+}
+
+// mergedShellEnv 合并路由参数与 bypass 参数，一起注入 startup.sh / teardown.sh。
+// 两个结构体各管各的键空间：Routing 用 DNS_PORT/PROXY_PORTS/BYPASS_MARK 等，
+// Bypass 用 CLIENT_BYPASS_* 前缀，互不覆盖。
+func mergedShellEnv(routing config.Routing, bypass config.Bypass, cnPath string) map[string]string {
+	env := routing.EnvVars(cnPath)
+	maps.Copy(env, bypass.EnvVars())
+	return env
+}
+
+// listenIsLoopback 判断监听地址是否只对本机可见。用于「bypass 启用却没放开
+// 监听面」的 warn——不阻止启动，只提醒 LAN 客户端连不上。
+// 不用 strings.HasPrefix(l, "127.")：那会漏掉 localhost:9998 与 [::1]:9998。
+func listenIsLoopback(listen string) bool {
+	host, _, err := net.SplitHostPort(listen)
+	if err != nil {
+		return false
+	}
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }

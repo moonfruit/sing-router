@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -132,5 +133,140 @@ func TestAPIApplyResourceQuery(t *testing.T) {
 	resp3, _ := http.Post(ts.URL+"/api/v1/apply?resource=bogus", "application/json", nil)
 	if resp3.StatusCode != 400 {
 		t.Fatalf("status: %d want 400", resp3.StatusCode)
+	}
+}
+
+// ServeHTTP 必须只监听 IPv4。路由器的 v6 地址是公网直接可达的（没有 NAT
+// 兜底），一旦监听 v6，管理 API 就挂在公网上了。
+//
+// 【必须用 wildcard 地址，不能用 127.0.0.1】Go 的 favoriteAddrFamily 对
+// "127.0.0.1" 这种显式 v4 地址在 net.Listen("tcp", ...) 下也会选 AF_INET——
+// 把 ServeHTTP 里的 net.Listen("tcp4", ...) 整个 revert 成 net.Listen("tcp", ...)，
+// 用 127.0.0.1 绑的这条测试照样是绿的，完全测不出双栈回归。0.0.0.0 才会真正
+// 触发 net.Listen("tcp", ...) 的双栈监听行为，这条测试的价值全靠它。
+func TestServeHTTPListensOnIPv4Only(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	mux := NewMux(APIDeps{Supervisor: newTestSupervisor(t), Version: "t", Rundir: "/tmp"})
+	port := freePort(t)
+	listenAddr := fmt.Sprintf("0.0.0.0:%d", port)
+	dialAddr := fmt.Sprintf("127.0.0.1:%d", port)
+	done := make(chan error, 1)
+	go func() { done <- ServeHTTP(ctx, mux, listenAddr) }()
+
+	// 等 listener 就绪
+	var resp *http.Response
+	var err error
+	for i := 0; i < 50; i++ {
+		resp, err = http.Get("http://" + dialAddr + "/api/v1/status")
+		if err == nil {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatalf("v4 request failed: %v", err)
+	}
+	_ = resp.Body.Close()
+
+	// 同端口的 v6 环回必须连不上——证明没有走双栈监听。
+	c, derr := net.DialTimeout("tcp6", fmt.Sprintf("[::1]:%d", port), 300*time.Millisecond)
+	if derr == nil {
+		_ = c.Close()
+		t.Fatal("v6 loopback is reachable; ServeHTTP must bind tcp4 only")
+	}
+	cancel()
+	<-done
+}
+
+// 显式配 v6 监听地址应当报错而不是静默降级。
+func TestServeHTTPRejectsIPv6ListenAddress(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	mux := NewMux(APIDeps{})
+	err := ServeHTTP(ctx, mux, fmt.Sprintf("[::1]:%d", freePort(t)))
+	if err == nil {
+		t.Fatal("expected error for IPv6 listen address")
+	}
+	if !strings.Contains(err.Error(), "tcp4") {
+		t.Fatalf("error should mention tcp4: %v", err)
+	}
+}
+
+// fakeBypassDeps 返回一个不真正调用 ipset 的 BypassDeps，供组装链路测试用。
+func fakeBypassDeps(enabled bool) *BypassDeps {
+	return &BypassDeps{
+		Enabled:       enabled,
+		DefaultTTLSec: 60,
+		MaxTTLSec:     600,
+		IpsetRun:      func(context.Context, ...string) error { return nil },
+		IpsetList:     func(context.Context, string) (string, error) { return "", nil },
+	}
+}
+
+// buildHTTPHandler 是「AuthMiddleware 必须包住整个 mux、且 deps.Bypass 必须在
+// NewMux 之前赋值」这条安全属性的唯一测试点。这条属性以前内联在 daemon.Run
+// 里，只能靠人工 review 保证；提出来之后才能被测试锁死。
+func TestBuildHTTPHandlerWrapsAuthAroundWholeMux(t *testing.T) {
+	deps := APIDeps{Supervisor: newTestSupervisor(t), Bypass: fakeBypassDeps(true)}
+	h := buildHTTPHandler(deps, "secret")
+
+	// LAN + 正确 token 读 bypass 集合：读操作只给 loopback，中间件必须挡在
+	// mux 之前——否则 bypass handler 自己完全不做来源校验，会直接放行。
+	if code := doReq(t, h, http.MethodGet, "/api/v1/bypass", "192.168.50.80:5555", "secret"); code != http.StatusForbidden {
+		t.Errorf("LAN GET bypass: got %d, want 403", code)
+	}
+
+	// LAN + 正确 token 写 bypass：白名单端点，应该放行。
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/bypass", strings.NewReader(`{"ips":["192.168.50.80"]}`))
+	req.RemoteAddr = "192.168.50.80:5555"
+	req.Header.Set("Authorization", "Bearer secret")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Errorf("LAN POST bypass: got %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+	}
+
+	// LAN + 正确 token 打管理端点：不在白名单里，必须 403——证明中间件包住
+	// 的是整个 mux 而不是只包了 bypass 这一个端点。
+	if code := doReq(t, h, http.MethodPost, "/api/v1/shutdown", "192.168.50.80:5555", "secret"); code != http.StatusForbidden {
+		t.Errorf("LAN POST shutdown: got %d, want 403", code)
+	}
+
+	// loopback 读 bypass：免 token 全权。
+	if code := doReq(t, h, http.MethodGet, "/api/v1/bypass", "127.0.0.1:5555", ""); code != http.StatusOK {
+		t.Errorf("loopback GET bypass: got %d, want 200", code)
+	}
+}
+
+// Bypass 为 nil 或 Enabled=false 时，/api/v1/bypass 端点在 mux 里根本不存在
+// （NewMux 的注册条件），LAN 请求必须 403，且即便走 loopback 绕过中间件也该
+// 命中 404——证明"未启用"不只是鉴权层面的拒绝，路由本身也没有注册。
+func TestBuildHTTPHandlerBypassNilOrDisabledDoesNotRegisterEndpoint(t *testing.T) {
+	sup := newTestSupervisor(t)
+	cases := []struct {
+		name   string
+		bypass *BypassDeps
+	}{
+		{"nil", nil},
+		{"disabled", fakeBypassDeps(false)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			deps := APIDeps{Supervisor: sup, Bypass: tc.bypass}
+			h := buildHTTPHandler(deps, "secret")
+
+			if code := doReq(t, h, http.MethodPost, "/api/v1/bypass", "192.168.50.80:5555", "secret"); code != http.StatusForbidden {
+				t.Errorf("LAN: got %d, want 403", code)
+			}
+
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/bypass", strings.NewReader(`{"ips":["192.168.50.80"]}`))
+			req.RemoteAddr = "127.0.0.1:5555"
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+			if rec.Code != http.StatusNotFound {
+				t.Errorf("loopback: got %d, want 404 (route must not be registered)", rec.Code)
+			}
+		})
 	}
 }

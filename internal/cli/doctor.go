@@ -140,7 +140,7 @@ func runRoutingChecks(cfg *config.DaemonConfig, opts doctorOpts) []doctorCheck {
 	if runtime.GOOS != "linux" {
 		return []doctorCheck{{Name: "routing checks", Status: "info", Detail: "skipped on " + runtime.GOOS}}
 	}
-	return checkRouting(config.LoadRouting(cfg))
+	return checkRouting(config.LoadRouting(cfg), config.LoadBypass(cfg))
 }
 
 func doctorHookCheck(hc firmware.HookCheck) doctorCheck {

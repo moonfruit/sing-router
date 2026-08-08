@@ -9,8 +9,15 @@ config_dir      = "config"
 ui_dir          = "ui"
 
 [http]
-listen          = "127.0.0.1:9998"
-# token         = ""                 # A 阶段不启用，D 阶段加
+# listen 默认只监听 loopback。仅当启用 [bypass]（LAN 客户端自助注册）时才需要
+# 放开到 0.0.0.0——install --enable-bypass 会自动渲染成 0.0.0.0:9998。
+# 【只监听 IPv4】daemon 强制 net.Listen("tcp4")：路由器的 v6 地址是公网直接
+# 可达的（v4 有 NAT 兜底、v6 没有），写 v6 监听地址会直接启动失败。
+listen          = "{{ .HTTPListen }}"
+# token 只对【非 loopback】来源生效：loopback 免 token 且可访问全部端点（CLI
+# 走这条路，行为不变）；LAN 来源必须带 Authorization: Bearer <token>，且只能
+# 访问 /api/v1/bypass，只能写不能读。
+token           = "{{ .HTTPToken }}"
 
 [log]
 # level 控本地 log 文件（log/sing-router.log）的级别下限；与 [seq].level
@@ -152,6 +159,29 @@ on_start_delay_sec = 300
 # lan_iface     = "br0"            # LAN 网桥接口；FORWARD REJECT 兜底用 -i 收窄
 # route_table   = 7892
 # proxy_ports   = "22,80,443,8080,8443"
+
+[bypass]
+# LAN 客户端动态 bypass 白名单：让"自己已经跑了透明代理的客户端"（例如开着
+# TUN 的笔记本）把自身 IP 注册进来，其流量便不再被本路由器二次代理。
+#
+# 客户端每 30s 心跳续约一次，条目过期完全交给内核 ipset timeout——daemon 不
+# 维护租约表、不落盘。停止心跳（客户端睡眠 / 离开 LAN / 自身代理挂掉）后条目
+# 自动消失，路由器重新接管。
+#
+# 身份靠 [http].token 而非 IP/MAC：笔记本经 USB Dock 接入时 MAC 属于 Dock，
+# 换一台机器插同一个 Dock 会拿到相同 MAC，按 MAC 或 DHCP 保留都区分不了。
+#
+# enabled = true 时必须同时设置非空 [http].token，否则 daemon 拒绝启动。
+enabled         = {{ .BypassEnabled }}
+# 客户端不指定 ttl_sec 时使用的租约秒数，同时也是 ipset 的 set 级默认 timeout。
+default_ttl_sec = 120
+# 客户端能申请的租约上限；超过直接 400。
+max_ttl_sec     = 600
+# 永久放行的地址 / MAC（不参与心跳）。留空则对应的 ipset 与 iptables 规则都不创建。
+# static_ips  = ["192.168.50.7"]
+# static_macs = ["00:E0:4C:67:01:46"]
+static_ips      = []
+static_macs     = []
 
 [install]
 # 本节在首次 install 时由命令行参数（或探测结果）渲染；之后由用户维护。

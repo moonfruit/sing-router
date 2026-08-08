@@ -20,6 +20,10 @@ set -eu
 : "${LAN_IFACE:?LAN_IFACE not set}"
 
 CN_IP_CIDR="${CN_IP_CIDR:-}"
+CLIENT_BYPASS_ENABLED="${CLIENT_BYPASS_ENABLED:-}"
+CLIENT_BYPASS_TTL="${CLIENT_BYPASS_TTL:-120}"
+CLIENT_BYPASS_STATIC_IPS="${CLIENT_BYPASS_STATIC_IPS:-}"
+CLIENT_BYPASS_STATIC_MACS="${CLIENT_BYPASS_STATIC_MACS:-}"
 
 # IPv4 保留地址 + 私有网段（reserve_ipv4）
 BYPASS="0.0.0.0/8 10.0.0.0/8 127.0.0.0/8 169.254.0.0/16 172.16.0.0/12 192.168.0.0/16 224.0.0.0/4 240.0.0.0/4 255.255.255.255/32"
@@ -33,6 +37,55 @@ if [ -n "$CN_IP_CIDR" ] && [ -f "$CN_IP_CIDR" ]; then
     } | ipset -! restore
 fi
 
+# ============ ipset：LAN 客户端 bypass 白名单 ============
+# 给"自己已经跑了透明代理的客户端"用：它们的流量不该被这台路由器二次代理。
+# 注意与上面的 $BYPASS_MARK (fwmark 0x7890) 完全无关——那是按包打标记，
+# 这里是按源地址整机放行，故一律用 client_bypass / CLIENT_BYPASS_ 前缀。
+if [ -n "$CLIENT_BYPASS_ENABLED" ]; then
+    # 动态租约 set：create 幂等且【不清空】。租约是客户端持续心跳声明的状态，
+    # 不能被 Restart (Shutdown+Startup) 冲掉——ready check 最长 60s，加上客户端
+    # 下一轮心跳 30s，清掉就意味着最坏约 90s 被误代理。过期交给内核 timeout。
+    ipset create client_bypass hash:ip timeout "$CLIENT_BYPASS_TTL" 2>/dev/null || true
+
+    # 静态 set：配置驱动，flush 后重填，保证配置里删掉的条目立刻失效。
+    # 与动态 set 分家正是为了能安全地 flush。
+    if [ -n "$CLIENT_BYPASS_STATIC_IPS" ]; then
+        ipset create client_bypass_static hash:ip 2>/dev/null || true
+        ipset flush client_bypass_static
+        for ip in $CLIENT_BYPASS_STATIC_IPS; do
+            ipset -exist add client_bypass_static "$ip"
+        done
+    fi
+    if [ -n "$CLIENT_BYPASS_STATIC_MACS" ]; then
+        ipset create client_bypass_mac hash:mac 2>/dev/null || true
+        ipset flush client_bypass_mac
+        for mac in $CLIENT_BYPASS_STATIC_MACS; do
+            ipset -exist add client_bypass_mac "$mac"
+        done
+    fi
+fi
+
+# add_client_bypass_returns <table> <chain>
+# 往指定链追加 bypass RETURN。必须在链创建后、其余 -A 之前调用，即装在链首：
+# 省掉后续 match 开销，语义也最直白（"这个源与我们无关，立即返回"）。
+# 一条 iptables 规则只能引用一个 set，所以三个 set 就是三条规则。
+#
+# 【busybox ash + set -eu】这里一律用 if/fi 而不是 `[ -n "$X" ] && cmd`——
+# AND-list 在条件为假时整体退出码为 1，会直接掀掉整个 startup。
+add_client_bypass_returns() {
+    if [ -z "$CLIENT_BYPASS_ENABLED" ]; then
+        return 0
+    fi
+    iptables -t "$1" -A "$2" -m set --match-set client_bypass src -j RETURN
+    if [ -n "$CLIENT_BYPASS_STATIC_IPS" ]; then
+        iptables -t "$1" -A "$2" -m set --match-set client_bypass_static src -j RETURN
+    fi
+    if [ -n "$CLIENT_BYPASS_STATIC_MACS" ]; then
+        iptables -t "$1" -A "$2" -m set --match-set client_bypass_mac src -j RETURN
+    fi
+    return 0
+}
+
 # ===================== 1. 路由表 =====================
 ip route replace default dev "$TUN" table "$ROUTE_TABLE"
 # ip rule 没有 replace 动词：先把累积的重复全删掉再 add 一条，保证幂等。
@@ -42,6 +95,7 @@ ip rule add fwmark "$ROUTE_MARK" table "$ROUTE_TABLE" 2>/dev/null || true
 
 # ===================== 2.1 TCP 透明代理 =====================
 iptables -t nat -N sing-box 2>/dev/null || iptables -t nat -F sing-box
+add_client_bypass_returns nat sing-box
 iptables -t nat -A sing-box -p tcp --dport 53 -j RETURN
 iptables -t nat -A sing-box -p udp --dport 53 -j RETURN
 iptables -t nat -A sing-box -m mark --mark "$BYPASS_MARK" -j RETURN
@@ -61,6 +115,7 @@ iptables -t nat -C PREROUTING -p tcp -d "$FAKEIP" -j sing-box 2>/dev/null \
 iptables -C FORWARD -o "$TUN" -j ACCEPT 2>/dev/null \
     || iptables -I FORWARD -o "$TUN" -j ACCEPT
 iptables -t mangle -N sing-box-mark 2>/dev/null || iptables -t mangle -F sing-box-mark
+add_client_bypass_returns mangle sing-box-mark
 iptables -t mangle -A sing-box-mark -p tcp --dport 53 -j RETURN
 iptables -t mangle -A sing-box-mark -p udp --dport 53 -j RETURN
 iptables -t mangle -A sing-box-mark -m mark --mark "$BYPASS_MARK" -j RETURN
@@ -78,6 +133,7 @@ iptables -t mangle -C PREROUTING -p udp -d "$FAKEIP" -j sing-box-mark 2>/dev/nul
 
 # ===================== 2.3 DNS 劫持 =====================
 iptables -t nat -N sing-box-dns 2>/dev/null || iptables -t nat -F sing-box-dns
+add_client_bypass_returns nat sing-box-dns
 iptables -t nat -A sing-box-dns -m mark --mark "$BYPASS_MARK" -j RETURN
 iptables -t nat -A sing-box-dns -p tcp -s "$LAN" -j REDIRECT --to-ports "$DNS_PORT"
 iptables -t nat -A sing-box-dns -p udp -s "$LAN" -j REDIRECT --to-ports "$DNS_PORT"

@@ -469,6 +469,56 @@ func TestSeedDefaults_CoversEveryEmbeddedConfigFragment(t *testing.T) {
 // 历史事故：DefaultRequiredRuleSets 要 var/rules/doh.srs，但 Makefile 的
 // RULE_SETS 和内嵌 assets/var/rules 里都没有它（内嵌的反而是没人用的 lan.srs），
 // 无 token 的机器装完直接起不来。
+// 不传任何 bypass 参数时，渲染结果必须与今天完全一致：只监听 loopback、
+// bypass 关闭。这是"不装本功能行为不变"的保证。
+func TestSeedRendersBypassDisabledByDefault(t *testing.T) {
+	dir := t.TempDir()
+	if err := SeedDefaults(dir, TemplateVars{Firmware: "koolshare"}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "daemon.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(data)
+	if !strings.Contains(s, `listen          = "127.0.0.1:9998"`) {
+		t.Errorf("default listen must stay loopback:\n%s", s)
+	}
+	if !strings.Contains(s, "enabled         = false") {
+		t.Errorf("bypass must default to disabled:\n%s", s)
+	}
+	if !strings.Contains(s, `token           = ""`) {
+		t.Errorf("token must default to empty:\n%s", s)
+	}
+}
+
+func TestSeedRendersBypassEnabled(t *testing.T) {
+	dir := t.TempDir()
+	vars := TemplateVars{
+		Firmware:      "koolshare",
+		HTTPListen:    "0.0.0.0:9998",
+		HTTPToken:     "cafebabe",
+		BypassEnabled: true,
+	}
+	if err := SeedDefaults(dir, vars); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "daemon.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(data)
+	if !strings.Contains(s, `listen          = "0.0.0.0:9998"`) {
+		t.Errorf("listen not rendered:\n%s", s)
+	}
+	if !strings.Contains(s, `token           = "cafebabe"`) {
+		t.Errorf("token not rendered:\n%s", s)
+	}
+	if !strings.Contains(s, "enabled         = true") {
+		t.Errorf("bypass enabled not rendered:\n%s", s)
+	}
+}
+
 func TestSeedDefaults_CoversRequiredRuleSetLocalPaths(t *testing.T) {
 	dir := t.TempDir()
 	if err := EnsureLayout(dir); err != nil {

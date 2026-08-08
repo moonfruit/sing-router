@@ -231,6 +231,162 @@ if [ "$sing_box_source" = "real (gitee download)" ]; then
         fi'
 fi
 
+# ------------------------------------------------------------------ Phase G
+step "Phase G  client bypass (ipset TTL + LAN auth)"
+
+# 用容器自己的 eth0 地址发请求 = 非 loopback 来源，从而真正走到 LAN 分支。
+CT_IP=$(ex "ip -4 -o addr show eth0 | awk '{print \$4}' | cut -d/ -f1")
+echo "container eth0 = $CT_IP"
+BP_TOKEN="dockertesttoken0123456789abcdef"
+
+# daemon.toml 已经在 Phase B 首次 install 时落地。internal/install/seed.go 里
+# writeDefaultAndSeed 的三态写保护语义是「已存在且内容不同 → 只写
+# xxx.default，不覆盖已存在的 xxx」（用来保护用户手改过的 daemon.toml）。
+# 如果这里不删掉旧 daemon.toml，下面的 `install --enable-bypass` 只会落一个
+# daemon.toml.default，线上的 daemon.toml 仍是 Phase B 那份 bypass=false 的
+# 旧内容，--enable-bypass 根本不会生效（首版脚本在这里栽过一次：G1 之前的
+# grep 断言直接 FAIL）。先删掉，让这次 install 落回"首次安装"分支，重新渲染
+# 出带 bypass 的版本。
+ex "rm -f /opt/home/sing-router/daemon.toml /opt/home/sing-router/daemon.toml.default"
+
+# 重新 install 打开 bypass，并把 token 固定成已知值（install 会渲染 daemon.toml）。
+ex "/opt/sbin/sing-router install -D /opt/home/sing-router --firmware koolshare \
+      --enable-bypass --http-token $BP_TOKEN >/dev/null"
+ex "grep -q 'enabled         = true' /opt/home/sing-router/daemon.toml" \
+    || { echo "FAIL: bypass not enabled in daemon.toml"; exit 1; }
+ex "grep -q 'listen          = \"0.0.0.0:9998\"' /opt/home/sing-router/daemon.toml" \
+    || { echo "FAIL: listen not opened to 0.0.0.0"; exit 1; }
+
+# G1 起的全部断言都要求 sing-box 真正把 mixed-in 端口起来、Supervisor 走到
+# state=running——只有这样 Startup 内部才会去跑 startup.sh（建 client_bypass
+# ipset、在三条链首插 RETURN）。fake-sing-box 不绑任何端口，ready check 永远
+# 通不过（同 Phase E 的 fake 分支），所以这一整段只在真 sing-box（有 gitee
+# token）时跑；无 token 时打印 SKIP，避免把"fake-sing-box 天生做不到"误判成
+# bypass 功能的回归，也避免拖垮 docker-test「无 token 也能跑通全流程」的既有
+# 契约（见文件头注释与 Phase E 同款处理）。
+# wait_running <超时秒数> —— 轮询 sing-router status 直到 state=running。
+# G1（首次启动）与 G4（restart 之后）共用：真 sing-box 冷启要做 cache-file
+# 加载 + rule-set 下载 + router 启动，Restart 本身又是完整的 Shutdown+Startup，
+# 两者都可能耗到 30s 量级（同 CLAUDE.md「Ready check 默认 60s 总超时」一节，
+# Phase E 也是这么等的）。固定 sleep 在这里量过是不够的：会在 startup.sh 跑完
+# 之前就去查 ipset/iptables，导致断言假性 FAIL。
+wait_running() {
+    local timeout_sec=$1
+    local elapsed=0
+    while [ "$elapsed" -lt "$timeout_sec" ]; do
+        if docker exec "$cid" sing-router status 2>/dev/null | grep -qE 'state=running'; then
+            return 0
+        fi
+        sleep 2
+        elapsed=$((elapsed + 2))
+    done
+    return 1
+}
+
+if [ "$sing_box_source" = "real (gitee download)" ]; then
+    ex "/opt/etc/init.d/S99sing-router start >/dev/null 2>&1 || true"
+    # init.d start 只是把 daemon fork 到后台就返回；真正跑 startup.sh 要等
+    # wait_running 轮询到 state=running。
+    echo "waiting up to 30s for bypass daemon to reach state=running..."
+    if ! wait_running 30; then
+        echo "FAIL: bypass daemon did not reach state=running within 30s; recent log:"
+        docker exec "$cid" tail -40 /opt/home/sing-router/log/sing-router.log 2>&1 || true
+        exit 1
+    fi
+
+    # --- G1: 动态 set 与三条链的 RETURN 都已就位 ---
+    ex "ipset list client_bypass >/dev/null" \
+        || { echo "FAIL: client_bypass set missing"; exit 1; }
+    # 用 ${var%%:*} / ${var##*:} 拆，不用 `set -- $spec`——后者会清掉脚本自身的
+    # 位置参数，而这个文件顶上是 set -euo pipefail。
+    for spec in "nat:sing-box" "mangle:sing-box-mark" "nat:sing-box-dns"; do
+        tbl=${spec%%:*}; chn=${spec##*:}
+        ex "iptables -t $tbl -S $chn | grep -q 'match-set client_bypass src.*RETURN'" \
+            || { echo "FAIL: no bypass RETURN in $tbl/$chn"; exit 1; }
+    done
+    echo "G1 ok: set + 3 chain RETURNs installed"
+
+    # --- G2: 错 token 401、管理端点 403 ---
+    code=$(ex "curl -s -o /dev/null -w '%{http_code}' -X POST \
+        -H 'Authorization: Bearer wrong' -d '{\"ips\":[\"$CT_IP\"]}' \
+        http://$CT_IP:9998/api/v1/bypass")
+    [ "$code" = "401" ] || { echo "FAIL: bad token gave $code, want 401"; exit 1; }
+
+    code=$(ex "curl -s -o /dev/null -w '%{http_code}' -X POST \
+        -H 'Authorization: Bearer $BP_TOKEN' http://$CT_IP:9998/api/v1/shutdown")
+    [ "$code" = "403" ] || { echo "FAIL: LAN shutdown gave $code, want 403"; exit 1; }
+
+    code=$(ex "curl -s -o /dev/null -w '%{http_code}' \
+        -H 'Authorization: Bearer $BP_TOKEN' http://$CT_IP:9998/api/v1/bypass")
+    [ "$code" = "403" ] || { echo "FAIL: LAN GET gave $code, want 403"; exit 1; }
+    echo "G2 ok: auth matrix enforced"
+
+    # --- G3: 注册成功且条目带递减的 TTL ---
+    ex "curl -sf -X POST -H 'Authorization: Bearer $BP_TOKEN' \
+        -d '{\"ips\":[\"192.168.99.7\"],\"ttl_sec\":300}' \
+        http://$CT_IP:9998/api/v1/bypass >/dev/null" \
+        || { echo "FAIL: register rejected"; exit 1; }
+    ex "ipset list client_bypass | grep -q '192.168.99.7 timeout'" \
+        || { echo "FAIL: entry not in set"; exit 1; }
+    echo "G3 ok: entry registered with timeout"
+
+    # --- G4: Restart 后租约存活（本设计最关键的行为）---
+    # /api/v1/restart 是同步的：daemon 侧阻塞到 Shutdown+Startup 全部跑完才
+    # 回包，CLI 侧的 HTTP 请求也跟着阻塞，正常情况下这里不需要重试。但 CLI
+    # 的 HTTP 客户端超时是 30s（internal/cli/httpclient.go），而 ready check
+    # 总超时上限是 60s——如果某次 restart 恰好卡到接近 30s，客户端超时会取消
+    # r.Context()，Startup 可能半途而废。之前这里用 `|| true` 吞掉了 restart
+    # 自身的错误码，一旦真的超时/失败，只会让下面的断言以让人困惑的方式间接
+    # FAIL；改成先检查 restart 命令本身的退出码，失败就直接报清楚原因。
+    if ! restart_out=$(ex "/opt/sbin/sing-router restart" 2>&1); then
+        echo "FAIL: sing-router restart itself failed:"
+        echo "$restart_out"
+        exit 1
+    fi
+    # restart 命令返回时 daemon 应已进入 state=running；这里仍轮询而不是直接
+    # 断言，避免 HTTP 回包与 daemon 内部状态更新之间的极小时间窗口造成假红。
+    if ! wait_running 30; then
+        echo "FAIL: daemon did not reach state=running within 30s after restart; recent log:"
+        docker exec "$cid" tail -40 /opt/home/sing-router/log/sing-router.log 2>&1 || true
+        exit 1
+    fi
+    ex "ipset list client_bypass | grep -q '192.168.99.7 timeout'" \
+        || { echo "FAIL: lease lost across restart -- teardown must NOT destroy client_bypass"; exit 1; }
+    ex "iptables -t nat -S sing-box | grep -q 'match-set client_bypass src.*RETURN'" \
+        || { echo "FAIL: RETURN rule not reinstalled after restart"; exit 1; }
+    echo "G4 ok: lease survived restart"
+
+    # --- G5: 注销后条目消失 ---
+    ex "curl -sf -X DELETE -H 'Authorization: Bearer $BP_TOKEN' \
+        -d '{\"ips\":[\"192.168.99.7\"]}' http://$CT_IP:9998/api/v1/bypass >/dev/null" \
+        || { echo "FAIL: revoke rejected"; exit 1; }
+    # 这里期望的是 grep 失败（条目已消失）。写成 `cmd && { exit 1; }` 会在 cmd
+    # 按预期失败时让整个语句返回非 0，被文件顶部的 set -e 掀掉——必须用 if/fi。
+    if ex "ipset list client_bypass | grep -q '192.168.99.7'"; then
+        echo "FAIL: entry still present after revoke"; exit 1
+    fi
+    echo "G5 ok: revoke removed the entry"
+
+    # --- G6: v6 地址被显式拒绝 ---
+    code=$(ex "curl -s -o /dev/null -w '%{http_code}' -X POST \
+        -H 'Authorization: Bearer $BP_TOKEN' -d '{\"ips\":[\"2408:820c::1\"]}' \
+        http://$CT_IP:9998/api/v1/bypass")
+    [ "$code" = "400" ] || { echo "FAIL: v6 register gave $code, want 400"; exit 1; }
+    echo "G6 ok: IPv6 explicitly rejected"
+
+    # --- G7: teardown 保留动态 set、销毁静态 set ---
+    ex "/opt/etc/init.d/S99sing-router stop >/dev/null 2>&1 || true"
+    sleep 2
+    ex "ipset list client_bypass >/dev/null" \
+        || { echo "FAIL: dynamic set destroyed by teardown"; exit 1; }
+    echo "G7 ok: dynamic set survived teardown"
+else
+    echo "SKIP: Phase G runtime assertions (G1-G7) — fake-sing-box never satisfies ReadyCheck,"
+    echo "      so Supervisor.Startup never gets to run startup.sh and the client_bypass ipset"
+    echo "      / iptables RETURN rules never get installed; nothing to assert without a real"
+    echo "      sing-box binary. Re-run with SING_ROUTER_GITEE_TOKEN set to exercise Phase G."
+fi
+
 # ------------------------------------------------------------------ Phase F
 step "Phase F  uninstall (rolls back hooks; rundir kept unless --purge)"
 ex 'sing-router uninstall'

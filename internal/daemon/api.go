@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"maps"
+	"net"
 	"net/http"
 	"os"
 	"time"
@@ -28,6 +30,10 @@ type APIDeps struct {
 	StatusExtra  func() map[string]any
 	ScriptByName func(name string) ([]byte, error)
 	ShutdownHook func() // 通常关 ctx 让 main 退出
+
+	// Bypass 非 nil 且 Enabled 时才注册 /api/v1/bypass。未启用时端点根本不存在，
+	// 连 404 之外的信息都不泄露。
+	Bypass *BypassDeps
 }
 
 // NewMux 注册所有端点到一个 http.ServeMux。
@@ -141,7 +147,19 @@ func NewMux(deps APIDeps) *http.ServeMux {
 			go deps.ShutdownHook()
 		}
 	})
+	if deps.Bypass != nil && deps.Bypass.Enabled {
+		mux.HandleFunc("/api/v1/bypass", deps.Bypass.handle)
+	}
 	return mux
+}
+
+// buildHTTPHandler 组装 mux 与鉴权中间件。单独提出来而不是内联在 Run 里，
+// 是为了让「中间件必须包住整个 mux」这条安全属性能被测试锁死——内联的话
+// 只能靠人工 review，改坏了测试也不会红。
+func buildHTTPHandler(deps APIDeps, token string) http.Handler {
+	mux := NewMux(deps)
+	bypassEnabled := deps.Bypass != nil && deps.Bypass.Enabled
+	return AuthMiddleware(mux, AuthConfig{Token: token, BypassEnabled: bypassEnabled})
 }
 
 func (deps APIDeps) statusSnapshot() map[string]any {
@@ -186,14 +204,22 @@ func writeError(w http.ResponseWriter, code int, errCode, msg string, detail any
 }
 
 // ServeHTTP 是 daemon.go 用的薄包装；阻塞直到 ctx 取消。
+//
+// 【必须 tcp4】不能用 http.Server.Addr + ListenAndServe——那走 net.Listen("tcp")，
+// 在双栈内核上会同时监听 v6。路由器的 v6 地址是公网直接可达的（v4 有 NAT 兜底，
+// v6 没有），一旦监听 v6，/api/v1/shutdown 就挂在公网上了。
+// 配了 v6 监听地址时直接报错，不静默降级——静默降级会让用户以为配置生效了。
 func ServeHTTP(ctx context.Context, mux http.Handler, listen string) error {
+	ln, err := net.Listen("tcp4", listen)
+	if err != nil {
+		return fmt.Errorf("listen tcp4 %q: %w", listen, err)
+	}
 	srv := &http.Server{
-		Addr:              listen,
 		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	errCh := make(chan error, 1)
-	go func() { errCh <- srv.ListenAndServe() }()
+	go func() { errCh <- srv.Serve(ln) }()
 	select {
 	case <-ctx.Done():
 		sctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)

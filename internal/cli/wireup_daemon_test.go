@@ -344,3 +344,26 @@ func TestAttachSeqSinkEndToEnd(t *testing.T) {
 		t.Fatalf("seq server got empty body")
 	}
 }
+
+// listenIsLoopback 是「bypass 启用却没放开监听面」这条 warn 的判断依据，
+// 三种写法（IPv4 字面量 / localhost / IPv6 字面量）都必须识别成 loopback，
+// 解析失败要保守地按「不是 loopback」处理（宁可多一条无害 warn，也不要漏报）。
+func TestListenIsLoopback(t *testing.T) {
+	cases := []struct {
+		listen string
+		want   bool
+	}{
+		{"127.0.0.1:9998", true},
+		{"localhost:9998", true},
+		{"[::1]:9998", true},
+		{"0.0.0.0:9998", false},
+		{"192.168.50.1:9998", false},
+		{"", false},
+		{"garbage", false},
+	}
+	for _, c := range cases {
+		if got := listenIsLoopback(c.listen); got != c.want {
+			t.Errorf("listenIsLoopback(%q) = %v, want %v", c.listen, got, c.want)
+		}
+	}
+}
