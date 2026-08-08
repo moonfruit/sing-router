@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/moonfruit/sing-router/internal/config"
+	"github.com/moonfruit/sing-router/internal/daemon"
 	"github.com/moonfruit/sing-router/internal/firmware"
 )
 
@@ -36,6 +38,12 @@ func newUninstallCmd() *cobra.Command {
 			// PID file written by the daemon (rundir/run/sing-router.pid) and signal
 			// it directly.
 			stopDaemonByPidFile(filepath.Join(rundir, "run", "sing-router.pid"))
+
+			// teardown.sh 刻意保留 client_bypass 动态 set（租约要活过 Restart），
+			// 所以这里是它唯一的清理点。此刻 daemon 已退出、teardown 已跑完，
+			// 没有 iptables 规则引用它，destroy 必定成功。
+			// best-effort：非 Linux 平台、set 本就不存在、ipset 未安装都属正常。
+			destroyClientBypassSet()
 
 			// 2. resolve firmware from daemon.toml; default to koolshare on missing
 			tomlPath := filepath.Join(rundir, "daemon.toml")
@@ -104,4 +112,10 @@ func stopDaemonByPidFile(pidFile string) {
 		time.Sleep(100 * time.Millisecond)
 	}
 	_ = proc.Signal(syscall.SIGKILL)
+}
+
+// destroyClientBypassSet 销毁动态 bypass ipset。所有失败都静默忽略——
+// uninstall 不该因为一个可选功能的残留清理失败而中断。
+func destroyClientBypassSet() {
+	_ = exec.Command("ipset", "destroy", daemon.ClientBypassSet).Run()
 }
