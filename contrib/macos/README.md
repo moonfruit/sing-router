@@ -14,6 +14,20 @@
 `bypass-agent.conf` 并 `chmod 600`，plist 只通过 `EnvironmentVariables`
 传配置文件路径。
 
+## 为什么默认路径是 `/etc/sing-router/`
+
+这个 agent 是以 root 跑的 LaunchDaemon，配置放 `/etc` 是 Unix 的标准位置，
+且不依赖 homebrew 前缀——Intel 上是 `/usr/local`、Apple Silicon 上是
+`/opt/homebrew`，写死任一个都会在另一种机器上出错；`/opt/etc` 更是两者都
+不对，纯属路由器侧 Entware 的路径习惯，不应该照搬到 macOS 客户端上。
+
+## 配置路径可覆盖
+
+脚本读哪个配置文件，只由 plist 里 `EnvironmentVariables` → `BYPASS_AGENT_CONF`
+决定，默认值只是给一个开箱即用的落点。如果你习惯把 sing-box 相关配置集中放
+在自己的目录（比如某个 `.../env/etc/sing-box/`），改这一个变量、把
+`ProgramArguments` 里的脚本路径也指过去即可，不必迁就 `/etc/sing-router/`。
+
 ## 部署
 
 ```bash
@@ -21,12 +35,12 @@
 ssh router '/opt/sbin/sing-router install -D /opt/home/sing-router --enable-bypass'
 
 # 2. 本机安装脚本与配置
-sudo mkdir -p /opt/etc/sing-box
-sudo cp bypass-agent.sh /opt/etc/sing-box/
-sudo chmod 755 /opt/etc/sing-box/bypass-agent.sh
-sudo cp bypass-agent.conf.example /opt/etc/sing-box/bypass-agent.conf
-sudo chmod 600 /opt/etc/sing-box/bypass-agent.conf
-sudo vi /opt/etc/sing-box/bypass-agent.conf   # 填入上一步打印的 token
+sudo mkdir -p /etc/sing-router
+sudo cp bypass-agent.sh /etc/sing-router/
+sudo chmod 755 /etc/sing-router/bypass-agent.sh
+sudo cp bypass-agent.conf.example /etc/sing-router/bypass-agent.conf
+sudo chmod 600 /etc/sing-router/bypass-agent.conf
+sudo vi /etc/sing-router/bypass-agent.conf   # 填入上一步打印的 token
 
 # 3. 装 launchd job
 sudo cp moonfruit.sing-bypass.plist /Library/LaunchDaemons/

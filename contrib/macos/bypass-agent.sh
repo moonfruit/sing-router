@@ -13,7 +13,7 @@
 
 set -eu
 
-CONF="${BYPASS_AGENT_CONF:-/opt/etc/sing-box/bypass-agent.conf}"
+CONF="${BYPASS_AGENT_CONF:-/etc/sing-router/bypass-agent.conf}"
 if [ ! -r "$CONF" ]; then
     echo "bypass-agent: cannot read $CONF" >&2
     exit 1

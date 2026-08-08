@@ -1,5 +1,5 @@
 # sing-router bypass agent 配置
-# 部署到 /opt/etc/sing-box/bypass-agent.conf 并 chmod 600（含 token）。
+# 部署到 /etc/sing-router/bypass-agent.conf 并 chmod 600（含 token）。
 
 # 路由器 API 基址。daemon 强制 tcp4 监听，这里必须用 IPv4 地址。
 ROUTER_URL="http://192.168.50.1:9998"

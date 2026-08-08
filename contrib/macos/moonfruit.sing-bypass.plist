@@ -6,12 +6,12 @@
 	<string>moonfruit.sing-bypass</string>
 	<key>ProgramArguments</key>
 	<array>
-		<string>/opt/etc/sing-box/bypass-agent.sh</string>
+		<string>/etc/sing-router/bypass-agent.sh</string>
 	</array>
 	<key>EnvironmentVariables</key>
 	<dict>
 		<key>BYPASS_AGENT_CONF</key>
-		<string>/opt/etc/sing-box/bypass-agent.conf</string>
+		<string>/etc/sing-router/bypass-agent.conf</string>
 	</dict>
 	<key>RunAtLoad</key>
 	<true/>
