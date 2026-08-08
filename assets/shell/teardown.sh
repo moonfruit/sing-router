@@ -61,5 +61,11 @@ ip route flush table "$ROUTE_TABLE" 2>/dev/null || true
 
 # ---- ipset ----
 ipset destroy cn 2>/dev/null || true
+# 静态 set 随规则一起走：它们是配置的投影，下次 startup 会按配置重建。
+ipset destroy client_bypass_static 2>/dev/null || true
+ipset destroy client_bypass_mac 2>/dev/null || true
+# client_bypass 动态 set 【刻意保留】——见 startup.sh 中的说明。此刻已无 iptables
+# 规则引用它（链在上面被 -F/-X 掉了），下次 startup 直接复用；daemon 长期停止时
+# 条目会按各自 timeout 自行过期。只有 uninstall 才销毁它。
 
 echo "sing-router teardown: rules removed"

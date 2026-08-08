@@ -244,3 +244,71 @@ func TestEmbeddedShellScriptsNoCommandBuiltin(t *testing.T) {
 		}
 	}
 }
+
+// startup.sh 必须在三条链首都装 bypass RETURN，且位置在 REDIRECT 之前——
+// 装在 REDIRECT 之后等于完全不生效。
+func TestStartupInstallsClientBypassReturnsBeforeRedirect(t *testing.T) {
+	data, err := ReadFile("shell/startup.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(data)
+	for _, chain := range []string{"nat sing-box", "mangle sing-box-mark", "nat sing-box-dns"} {
+		if !strings.Contains(s, "add_client_bypass_returns "+chain) {
+			t.Errorf("startup.sh must call add_client_bypass_returns for %q", chain)
+		}
+	}
+	if !strings.Contains(s, "--match-set client_bypass src -j RETURN") {
+		t.Error("startup.sh must add a RETURN rule matching the client_bypass set")
+	}
+	// helper 调用必须早于该链的 REDIRECT，否则 RETURN 永远轮不到。
+	helperAt := strings.Index(s, "add_client_bypass_returns nat sing-box\n")
+	redirectAt := strings.Index(s, "-j REDIRECT --to-ports \"$REDIRECT_PORT\"")
+	if helperAt < 0 || redirectAt < 0 || helperAt > redirectAt {
+		t.Errorf("bypass RETURN must be installed before REDIRECT (helper@%d redirect@%d)",
+			helperAt, redirectAt)
+	}
+}
+
+// 动态 set 不能 destroy——租约是客户端持续声明的状态，被 Restart 冲掉会让
+// 客户端最坏约 90s 被误代理。这条断言防止日后有人"顺手补全"。
+func TestTeardownKeepsDynamicClientBypassSet(t *testing.T) {
+	data, err := ReadFile("shell/teardown.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(data)
+	for _, set := range []string{"client_bypass_static", "client_bypass_mac"} {
+		if !strings.Contains(s, "ipset destroy "+set) {
+			t.Errorf("teardown.sh must destroy %s", set)
+		}
+	}
+	for _, line := range strings.Split(s, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "ipset destroy client_bypass ") ||
+			trimmed == "ipset destroy client_bypass" {
+			t.Fatal("teardown.sh must NOT destroy the dynamic client_bypass set " +
+				"(leases survive Restart by design; only uninstall clears it)")
+		}
+	}
+}
+
+// set -eu 下 `[ -n "$X" ] && cmd` 在条件为假时整体退出码为 1，会掀掉整个脚本。
+func TestEmbeddedShellScriptsNoAndListGuards(t *testing.T) {
+	for _, name := range []string{"shell/startup.sh", "shell/teardown.sh"} {
+		data, err := ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i, line := range strings.Split(string(data), "\n") {
+			trimmed := strings.TrimSpace(line)
+			if strings.HasPrefix(trimmed, "#") {
+				continue
+			}
+			if strings.HasPrefix(trimmed, "[ ") && strings.Contains(trimmed, " ] && ") {
+				t.Errorf("%s:%d uses an AND-list guard under set -eu; use if/fi instead: %s",
+					name, i+1, trimmed)
+			}
+		}
+	}
+}
