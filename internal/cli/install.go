@@ -206,11 +206,22 @@ func newInstallCmd() *cobra.Command {
 				}
 			}
 
-			if enableBypass {
+			switch {
+			case enableBypass:
 				fmt.Fprintf(cmd.OutOrStdout(),
 					"\nLAN client bypass enabled.\n  listen: %s\n  token:  %s\n"+
-						"Copy this token into the client agent config (contrib/macos/bypass-agent.conf).\n",
+						"Copy this token into the client agent config (contrib/macos/bypass-agent.conf).\n"+
+						"Keep this token secret: don't paste it into a public issue, chat log, or CI output.\n",
 					httpListen, httpToken)
+			case httpToken != "":
+				// 没给 --enable-bypass，[bypass].enabled 恒为 false，AuthMiddleware
+				// 对非 loopback 请求一律 403、根本不看 token；[http].listen 也还是
+				// loopback，LAN 连不进来。所以这个 token 写进 daemon.toml 但完全不
+				// 生效——不提醒的话，用户会以为自己已经配好了。
+				fmt.Fprintln(cmd.OutOrStdout(),
+					"\nNote: --http-token was set but --enable-bypass was not, so this token "+
+						"will not take effect ([bypass] stays disabled and [http].listen stays on "+
+						"loopback). Re-run with --enable-bypass to actually open LAN bypass registration.")
 			}
 
 			fmt.Fprintln(cmd.OutOrStdout())
