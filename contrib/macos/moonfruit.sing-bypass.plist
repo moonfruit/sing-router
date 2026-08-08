@@ -23,8 +23,8 @@
 		<string>/Library/Preferences/SystemConfiguration/</string>
 	</array>
 	<key>StandardOutPath</key>
-	<string>/tmp/moonfruit.sing-bypass.log</string>
+	<string>/var/log/moonfruit.sing-bypass.log</string>
 	<key>StandardErrorPath</key>
-	<string>/tmp/moonfruit.sing-bypass.log</string>
+	<string>/var/log/moonfruit.sing-bypass.log</string>
 </dict>
 </plist>

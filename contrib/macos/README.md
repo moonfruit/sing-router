@@ -48,11 +48,27 @@ sudo chown root:wheel /Library/LaunchDaemons/moonfruit.sing-bypass.plist
 sudo launchctl load -w /Library/LaunchDaemons/moonfruit.sing-bypass.plist
 ```
 
+## 日志轮转（可选，建议配置）
+
+`StandardOutPath`/`StandardErrorPath` 指向 `/var/log/moonfruit.sing-bypass.log`。
+launchd 本身不轮转这个文件——笔记本频繁换网环境时状态变化不少，不配轮转
+会无上限增长。用 macOS 自带的 `newsyslog` 即可，新建
+`/etc/newsyslog.d/moonfruit.sing-bypass.conf`：
+
+```
+# logfilename                           [owner:group]  mode  count  size(KB)  when  flags
+/var/log/moonfruit.sing-bypass.log      root:wheel     644   7      1000      *     J
+```
+
+含义：保留 7 份历史、单份超过 1000KB 就轮转、`J` 表示轮转后 gzip 压缩、
+`when` 用 `*` 表示只看 size 不看时间。`newsyslog` 由系统的周期性任务自动
+触发，不需要额外安装或启用服务。
+
 ## 验证
 
 ```bash
 # 本机日志（只在状态变化时输出，稳态静默是正常的）
-tail -f /tmp/moonfruit.sing-bypass.log
+sudo tail -f /var/log/moonfruit.sing-bypass.log
 
 # 路由器侧确认租约（GET 只允许 loopback，所以要在路由器上执行）
 ssh router 'curl -s http://127.0.0.1:9998/api/v1/bypass'
@@ -65,7 +81,9 @@ ssh router 'sing-router doctor'
 | 现象 | 原因 |
 |---|---|
 | 日志反复 `local sing-box not ready` | 本机 clash api 没起，检查 `LOCAL_CLASH_API` |
-| 日志反复 `no route to <gw>` | 不在目标 LAN 上（正常，比如在外面） |
-| `renew failed` | 路由器 daemon 没跑，或 `[http].listen` 仍是 loopback |
-| 路由器上 401 | `TOKEN` 与 `[http].token` 不一致 |
-| 路由器上 403 | `[bypass].enabled` 为 false |
+| 日志反复 `no route to <gw>`（偶发一两次即消失） | Wi-Fi 漫游瞬断 / DHCP 续租，正常抖动，不会撤销现有租约 |
+| 日志持续 `no route to <gw>` | 不在目标 LAN 上（正常，比如在外面） |
+| `renew failed ... http_code=000` | 路由器不可达：daemon 没跑，或 `[http].listen` 仍是 loopback |
+| `renew failed ... 401` | `TOKEN` 与路由器 `[http].token` 不一致 |
+| `renew failed ... 403` | 路由器 `[bypass].enabled` 为 false |
+| `renew failed ... 400` | 请求体被服务端拒绝（IP 格式、数量超限等） |
