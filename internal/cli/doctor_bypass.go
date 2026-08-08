@@ -40,9 +40,16 @@ func checkClientBypass(b config.Bypass) []doctorCheck {
 
 func checkBypassSet(spec bypassSetSpec, b config.Bypass) doctorCheck {
 	name := "ipset " + spec.name
-	out, _, err := runCmd("ipset", "list", spec.name)
+	out, code, err := runCmd("ipset", "list", spec.name)
 	want := spec.expected(b)
-	if err != nil {
+	// code == -1：ipset 命令本身跑不起来（未安装/PATH 里没有），与"set 不存在"
+	// 是两回事——照抄 checkIptablesChains 的约定，不能把工具缺失误判成
+	// "符合预期的不存在"，否则会把真正的环境问题吞成一条 pass。
+	if code == -1 {
+		return doctorCheck{Name: name, Status: "warn",
+			Detail: "ipset unavailable: " + err.Error()}
+	}
+	if code != 0 {
 		if !want {
 			return doctorCheck{Name: name, Status: "pass",
 				Detail: fmt.Sprintf("absent as expected (no %s configured)", spec.role)}
@@ -55,7 +62,7 @@ func checkBypassSet(spec bypassSetSpec, b config.Bypass) doctorCheck {
 		return doctorCheck{Name: name, Status: "warn",
 			Detail: fmt.Sprintf("exists but no %s configured; stale set from an earlier config", spec.role)}
 	}
-	detail := fmt.Sprintf("%d entrie(s) [%s]", len(entries), spec.role)
+	detail := fmt.Sprintf("%d entries [%s]", len(entries), spec.role)
 	if len(entries) > 0 {
 		detail += ": " + strings.Join(entries, ", ")
 	}
@@ -76,8 +83,14 @@ func checkBypassChainRules() []doctorCheck {
 	var out []doctorCheck
 	for _, tgt := range targets {
 		name := fmt.Sprintf("%s/%s bypass RETURN", tgt.table, tgt.chain)
-		listing, _, err := runCmd("iptables", "-t", tgt.table, "-S", tgt.chain)
-		if err != nil {
+		listing, code, err := runCmd("iptables", "-t", tgt.table, "-S", tgt.chain)
+		// 同上：区分"iptables 命令跑不起来"与"链本身取不到"，避免误导排查方向。
+		if code == -1 {
+			out = append(out, doctorCheck{Name: name, Status: "warn",
+				Detail: "iptables unavailable: " + err.Error()})
+			continue
+		}
+		if code != 0 {
 			out = append(out, doctorCheck{Name: name, Status: "fail",
 				Detail: "chain not found; sing-router rules not installed"})
 			continue
@@ -97,7 +110,13 @@ func checkBypassChainRules() []doctorCheck {
 		case returnAt < 0:
 			out = append(out, doctorCheck{Name: name, Status: "fail",
 				Detail: "no RETURN rule for the client_bypass set"})
-		case terminalAt >= 0 && returnAt > terminalAt:
+		case terminalAt < 0:
+			// 链里没有终结规则，"RETURN 在其前面"这个断言无从谈起；链本身是否
+			// 完整由 checkIptablesChains 负责，这里只如实报告"无法判断顺序"。
+			out = append(out, doctorCheck{Name: name, Status: "warn",
+				Detail: "no terminal rule (REDIRECT/MARK) found in chain; cannot judge RETURN's " +
+					"relative position, chain may not be fully installed"})
+		case returnAt > terminalAt:
 			out = append(out, doctorCheck{Name: name, Status: "fail",
 				Detail: fmt.Sprintf("RETURN is at position %d, after the terminal rule at %d; "+
 					"it will never be reached", returnAt, terminalAt)})
