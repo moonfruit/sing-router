@@ -20,6 +20,12 @@ const ClientBypassSet = "client_bypass"
 // maxBypassIPs 限制单次请求的地址条数，防止一个请求刷爆 set。
 const maxBypassIPs = 16
 
+// maxBypassBodyBytes 限制请求体大小。16 个 IPv4 地址编码成 JSON 顶多几百
+// 字节；64KiB 对正常心跳请求绰绰有余，同时挡住"把某个数组元素塞成几百
+// MB 字符串"这类在条数校验（发生在 json.Decode 之后）生效前就已经把内存
+// 吃光的请求。
+const maxBypassBodyBytes = 64 * 1024
+
 // BypassDeps 是 bypass handler 的依赖集。
 type BypassDeps struct {
 	Enabled       bool
@@ -124,6 +130,9 @@ func (d BypassDeps) resolveTTL(req bypassRequest) (int, error) {
 }
 
 func decodeBypassRequest(w http.ResponseWriter, r *http.Request) (bypassRequest, []string, bool) {
+	// MaxBytesReader 必须包在条数校验（parseIPs 里的 maxBypassIPs）之前生效，
+	// 否则一个单元素但超大字符串的数组会在计数前就把整个 body 读进内存。
+	r.Body = http.MaxBytesReader(w, r.Body, maxBypassBodyBytes)
 	var req bypassRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "bypass.bad_request", err.Error(), nil)
@@ -148,14 +157,24 @@ func (d BypassDeps) handleRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	run := d.run()
+	// 中途失败不回滚：客户端是周期性心跳，下一轮会带着全部地址重新发一次
+	// 请求；已经写入的条目挂着 TTL，到期会自行清除，所以"部分应用"是安全、
+	// 可自愈的中间状态，不值得为它引入回滚的复杂度和额外失败面。
+	// 注意 parseIPs 的"全有或全无"只约束参数校验阶段（防止一个明显有错的
+	// 请求被当合法处理掉一半）——一旦进入这里开始真正调用 ipset 就不再是
+	// 原子操作，失败时把已成功的地址通过 detail 回传，方便客户端判断哪些
+	// 还需要重试，避免误以为整批都没生效。
+	succeeded := make([]string, 0, len(ips))
 	for _, ip := range ips {
 		// -exist：条目还在则刷新 TTL；已被内核按 timeout 清掉则重新建。
 		// 两种情况续约效果等价，客户端无需关心条目当前是否存在。
 		if err := run(r.Context(), "-exist", "add", ClientBypassSet, ip,
 			"timeout", strconv.Itoa(ttl)); err != nil {
-			writeError(w, http.StatusInternalServerError, "bypass.ipset_failed", err.Error(), nil)
+			writeError(w, http.StatusInternalServerError, "bypass.ipset_failed", err.Error(),
+				map[string]any{"succeeded": succeeded})
 			return
 		}
+		succeeded = append(succeeded, ip)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "accepted": ips, "ttl_sec": ttl})
 }
@@ -166,13 +185,19 @@ func (d BypassDeps) handleRevoke(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	run := d.run()
+	// 同 handleRegister：中途失败不回滚，已删除的条目通过 detail.succeeded
+	// 回传；未删除的条目客户端可以重试，也可以放着让它自然过期，两者都不
+	// 是错误状态。
+	succeeded := make([]string, 0, len(ips))
 	for _, ip := range ips {
 		// -exist 让「删一个本就不存在的条目」不报错——客户端注销时条目可能
 		// 已经自行过期了，那不是错误。
 		if err := run(r.Context(), "-exist", "del", ClientBypassSet, ip); err != nil {
-			writeError(w, http.StatusInternalServerError, "bypass.ipset_failed", err.Error(), nil)
+			writeError(w, http.StatusInternalServerError, "bypass.ipset_failed", err.Error(),
+				map[string]any{"succeeded": succeeded})
 			return
 		}
+		succeeded = append(succeeded, ip)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "revoked": ips})
 }
