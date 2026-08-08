@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"maps"
+	"net"
 	"net/http"
 	"os"
 	"time"
@@ -193,14 +195,22 @@ func writeError(w http.ResponseWriter, code int, errCode, msg string, detail any
 }
 
 // ServeHTTP 是 daemon.go 用的薄包装；阻塞直到 ctx 取消。
+//
+// 【必须 tcp4】不能用 http.Server.Addr + ListenAndServe——那走 net.Listen("tcp")，
+// 在双栈内核上会同时监听 v6。路由器的 v6 地址是公网直接可达的（v4 有 NAT 兜底，
+// v6 没有），一旦监听 v6，/api/v1/shutdown 就挂在公网上了。
+// 配了 v6 监听地址时直接报错，不静默降级——静默降级会让用户以为配置生效了。
 func ServeHTTP(ctx context.Context, mux http.Handler, listen string) error {
+	ln, err := net.Listen("tcp4", listen)
+	if err != nil {
+		return fmt.Errorf("listen tcp4 %q: %w", listen, err)
+	}
 	srv := &http.Server{
-		Addr:              listen,
 		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	errCh := make(chan error, 1)
-	go func() { errCh <- srv.ListenAndServe() }()
+	go func() { errCh <- srv.Serve(ln) }()
 	select {
 	case <-ctx.Done():
 		sctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)

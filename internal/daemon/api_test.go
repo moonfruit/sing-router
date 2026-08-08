@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -132,5 +133,55 @@ func TestAPIApplyResourceQuery(t *testing.T) {
 	resp3, _ := http.Post(ts.URL+"/api/v1/apply?resource=bogus", "application/json", nil)
 	if resp3.StatusCode != 400 {
 		t.Fatalf("status: %d want 400", resp3.StatusCode)
+	}
+}
+
+// ServeHTTP 必须只监听 IPv4。路由器的 v6 地址是公网直接可达的（没有 NAT
+// 兜底），一旦监听 v6，管理 API 就挂在公网上了。
+func TestServeHTTPListensOnIPv4Only(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	mux := NewMux(APIDeps{Supervisor: newTestSupervisor(t), Version: "t", Rundir: "/tmp"})
+	port := freePort(t)
+	addr := fmt.Sprintf("127.0.0.1:%d", port)
+	done := make(chan error, 1)
+	go func() { done <- ServeHTTP(ctx, mux, addr) }()
+
+	// 等 listener 就绪
+	var resp *http.Response
+	var err error
+	for i := 0; i < 50; i++ {
+		resp, err = http.Get("http://" + addr + "/api/v1/status")
+		if err == nil {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatalf("v4 request failed: %v", err)
+	}
+	_ = resp.Body.Close()
+
+	// 同端口的 v6 环回必须连不上——证明没有走双栈监听。
+	c, derr := net.DialTimeout("tcp6", fmt.Sprintf("[::1]:%d", port), 300*time.Millisecond)
+	if derr == nil {
+		_ = c.Close()
+		t.Fatal("v6 loopback is reachable; ServeHTTP must bind tcp4 only")
+	}
+	cancel()
+	<-done
+}
+
+// 显式配 v6 监听地址应当报错而不是静默降级。
+func TestServeHTTPRejectsIPv6ListenAddress(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	mux := NewMux(APIDeps{})
+	err := ServeHTTP(ctx, mux, fmt.Sprintf("[::1]:%d", freePort(t)))
+	if err == nil {
+		t.Fatal("expected error for IPv6 listen address")
+	}
+	if !strings.Contains(err.Error(), "tcp4") {
+		t.Fatalf("error should mention tcp4: %v", err)
 	}
 }
