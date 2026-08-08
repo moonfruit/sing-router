@@ -944,7 +944,7 @@ func (d BypassDeps) handle(w http.ResponseWriter, r *http.Request) {
 // 客户端会以为注册成功了却少了一个地址，且这种错误在稳态下无声无息。
 func parseIPs(raw []string) (ips []string, errCode string, err error) {
 	if len(raw) == 0 {
-		return nil, "bypass.too_many_ips", fmt.Errorf("ips must not be empty")
+		return nil, "bypass.bad_request", fmt.Errorf("ips must not be empty")
 	}
 	if len(raw) > maxBypassIPs {
 		return nil, "bypass.too_many_ips",
@@ -1293,12 +1293,33 @@ func mergedShellEnv(routing config.Routing, bypass config.Bypass, cnPath string)
 		return fmt.Errorf("bypass config: %w", err)
 	}
 	// 启用了却只监听 loopback：LAN 客户端根本连不上，但这不该阻止 daemon 启动。
-	if bypassCfg.Enabled && strings.HasPrefix(cfg.HTTP.Listen, "127.") {
+	if bypassCfg.Enabled && listenIsLoopback(cfg.HTTP.Listen) {
 		em.Warn("config", "bypass.listen_loopback",
 			"[bypass].enabled = true but [http].listen is {Listen}; LAN clients cannot register",
 			map[string]any{"Listen": cfg.HTTP.Listen})
 	}
 ```
+
+并在 `mergedShellEnv` 旁边加：
+
+```go
+// listenIsLoopback 判断监听地址是否只对本机可见。用于「bypass 启用却没放开
+// 监听面」的 warn——不阻止启动，只提醒 LAN 客户端连不上。
+// 不用 strings.HasPrefix(l, "127.")：那会漏掉 localhost:9998 与 [::1]:9998。
+func listenIsLoopback(listen string) bool {
+	host, _, err := net.SplitHostPort(listen)
+	if err != nil {
+		return false
+	}
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+```
+
+`wireup_daemon.go` 的 import 还需补 `"net"`。
 
 在 `daemon.Options{...}` 里 `Listen: cfg.HTTP.Listen,` 之后加：
 
@@ -1976,7 +1997,7 @@ func checkClientBypass(b config.Bypass) []doctorCheck {
 	for _, spec := range bypassSets {
 		out = append(out, checkBypassSet(spec, b))
 	}
-	out = append(out, checkBypassChainRules(b)...)
+	out = append(out, checkBypassChainRules()...)
 	return out
 }
 
@@ -2006,7 +2027,10 @@ func checkBypassSet(spec bypassSetSpec, b config.Bypass) doctorCheck {
 
 // checkBypassChainRules 确认三条链各有 client_bypass 的 RETURN，且位置在
 // 该链的终结规则（REDIRECT / MARK）之前——装在其后等于完全不生效。
-func checkBypassChainRules(b config.Bypass) []doctorCheck {
+//
+// 不接受 config.Bypass：动态 set 的 RETURN 只要功能启用就必须存在，与静态
+// 配置无关，调用方已在 checkClientBypass 里判过 Enabled。
+func checkBypassChainRules() []doctorCheck {
 	targets := []struct{ table, chain string }{
 		{"nat", "sing-box"},
 		{"mangle", "sing-box-mark"},
@@ -2045,7 +2069,6 @@ func checkBypassChainRules(b config.Bypass) []doctorCheck {
 				Detail: "RETURN installed ahead of the terminal rule"})
 		}
 	}
-	_ = b
 	return out
 }
 
@@ -2145,10 +2168,12 @@ sleep 5
 # --- G1: 动态 set 与三条链的 RETURN 都已就位 ---
 ex "ipset list client_bypass >/dev/null" \
     || { echo "FAIL: client_bypass set missing"; exit 1; }
-for spec in "nat sing-box" "mangle sing-box-mark" "nat sing-box-dns"; do
-    set -- $spec
-    ex "iptables -t $1 -S $2 | grep -q 'match-set client_bypass src.*RETURN'" \
-        || { echo "FAIL: no bypass RETURN in $1/$2"; exit 1; }
+# 用 ${var%%:*} / ${var##*:} 拆，不用 `set -- $spec`——后者会清掉脚本自身的
+# 位置参数，而这个文件顶上是 set -euo pipefail。
+for spec in "nat:sing-box" "mangle:sing-box-mark" "nat:sing-box-dns"; do
+    tbl=${spec%%:*}; chn=${spec##*:}
+    ex "iptables -t $tbl -S $chn | grep -q 'match-set client_bypass src.*RETURN'" \
+        || { echo "FAIL: no bypass RETURN in $tbl/$chn"; exit 1; }
 done
 echo "G1 ok: set + 3 chain RETURNs installed"
 
@@ -2189,8 +2214,11 @@ echo "G4 ok: lease survived restart"
 ex "curl -sf -X DELETE -H 'Authorization: Bearer $BP_TOKEN' \
     -d '{\"ips\":[\"192.168.99.7\"]}' http://$CT_IP:9998/api/v1/bypass >/dev/null" \
     || { echo "FAIL: revoke rejected"; exit 1; }
-ex "ipset list client_bypass | grep -q '192.168.99.7'" \
-    && { echo "FAIL: entry still present after revoke"; exit 1; }
+# 这里期望的是 grep 失败（条目已消失）。写成 `cmd && { exit 1; }` 会在 cmd
+# 按预期失败时让整个语句返回非 0，被文件顶部的 set -e 掀掉——必须用 if/fi。
+if ex "ipset list client_bypass | grep -q '192.168.99.7'"; then
+    echo "FAIL: entry still present after revoke"; exit 1
+fi
 echo "G5 ok: revoke removed the entry"
 
 # --- G6: v6 地址被显式拒绝 ---
