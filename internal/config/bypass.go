@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"strconv"
 	"strings"
 )
@@ -59,6 +60,23 @@ func (b Bypass) Validate(httpToken string) error {
 	if b.DefaultTTLSec < 1 || b.MaxTTLSec < 1 || b.DefaultTTLSec > b.MaxTTLSec {
 		return fmt.Errorf("[bypass]: need 1 <= default_ttl_sec (%d) <= max_ttl_sec (%d)",
 			b.DefaultTTLSec, b.MaxTTLSec)
+	}
+	// static_ips / static_macs 一路无校验地传给 startup.sh：`ipset -exist add
+	// client_bypass_static "$ip"` 没有 `|| true`，脚本又是 set -eu——一个 typo
+	// 就会在链创建之前掀掉整个 startup.sh，Supervisor.Startup 直接 Fatal，
+	// 而用户只能在 stderr 里看到一行 "ipset v7.6: Syntax error"。
+	// 本期只做 IPv4（.To4() != nil）：static_ips 是喂给 hash:ip 类型的 ipset，
+	// 与 bypassRequest 校验（parseIPs）的 IPv6 限制保持一致。
+	for i, raw := range b.StaticIPs {
+		ip := net.ParseIP(strings.TrimSpace(raw))
+		if ip == nil || ip.To4() == nil {
+			return fmt.Errorf("[bypass].static_ips[%d] = %q is not a valid IPv4 address", i, raw)
+		}
+	}
+	for i, raw := range b.StaticMACs {
+		if _, err := net.ParseMAC(strings.TrimSpace(raw)); err != nil {
+			return fmt.Errorf("[bypass].static_macs[%d] = %q is not a valid MAC address: %w", i, raw, err)
+		}
 	}
 	return nil
 }

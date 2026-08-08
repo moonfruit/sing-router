@@ -82,6 +82,56 @@ func TestValidateRejectsBadTTLRange(t *testing.T) {
 	}
 }
 
+// 一个 typo 的 static_ips 会一路传给 startup.sh 的 `ipset -exist add` 而没有
+// `|| true` 兜底，在 set -eu 下掀掉整个 startup（链创建之前），Supervisor.Startup
+// 直接 Fatal。这条必须在 daemon 启动前、iptables 还没开始装之前就挡住。
+func TestValidateRejectsInvalidStaticIP(t *testing.T) {
+	b := DefaultBypass()
+	b.Enabled = true
+	b.StaticIPs = []string{"192.168.50.999"}
+	err := b.Validate("tok")
+	if err == nil {
+		t.Fatal("expected error for invalid static ip")
+	}
+	if !strings.Contains(err.Error(), "static_ips[0]") || !strings.Contains(err.Error(), "192.168.50.999") {
+		t.Fatalf("error should name the key/index/value: %v", err)
+	}
+}
+
+// 本期只做 IPv4：static_ips 喂给 hash:ip 类型的 ipset，IPv6 字面量必须被拒绝，
+// 而不是被 ipset 在运行时报语法错误。
+func TestValidateRejectsIPv6StaticIP(t *testing.T) {
+	b := DefaultBypass()
+	b.Enabled = true
+	b.StaticIPs = []string{"fe80::1"}
+	if err := b.Validate("tok"); err == nil {
+		t.Fatal("expected error for IPv6 static ip")
+	}
+}
+
+func TestValidateRejectsInvalidStaticMAC(t *testing.T) {
+	b := DefaultBypass()
+	b.Enabled = true
+	b.StaticMACs = []string{"not-a-mac"}
+	err := b.Validate("tok")
+	if err == nil {
+		t.Fatal("expected error for invalid static mac")
+	}
+	if !strings.Contains(err.Error(), "static_macs[0]") || !strings.Contains(err.Error(), "not-a-mac") {
+		t.Fatalf("error should name the key/index/value: %v", err)
+	}
+}
+
+func TestValidateAcceptsWellFormedStaticIPsAndMACs(t *testing.T) {
+	b := DefaultBypass()
+	b.Enabled = true
+	b.StaticIPs = []string{"192.168.50.7", "192.168.50.8"}
+	b.StaticMACs = []string{"00:E0:4C:67:01:46"}
+	if err := b.Validate("tok"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestEnvVarsDisabledYieldsEmptyEnabledFlag(t *testing.T) {
 	env := DefaultBypass().EnvVars()
 	if env["CLIENT_BYPASS_ENABLED"] != "" {
