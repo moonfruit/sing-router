@@ -27,6 +27,7 @@ const envBarkKey = "SING_ROUTER_BARK_KEY"
 type DaemonConfig struct {
 	Runtime    RuntimeConfig    `toml:"runtime"`
 	HTTP       HTTPConfig       `toml:"http"`
+	Bypass     BypassConfig     `toml:"bypass"`
 	Log        LogConfig        `toml:"log"`
 	Supervisor SupervisorConfig `toml:"supervisor"`
 	Zoo        ZooConfig        `toml:"zoo"`
@@ -50,6 +51,16 @@ type RuntimeConfig struct {
 type HTTPConfig struct {
 	Listen string `toml:"listen"`
 	Token  string `toml:"token"`
+}
+
+// BypassConfig 是 [bypass] 段的原始解析结果。指针字段用于区分「用户显式写了 0」
+// 与「用户没写」；Enabled 无此需求（零值 false 正是我们要的默认）。
+type BypassConfig struct {
+	Enabled       bool     `toml:"enabled"`
+	DefaultTTLSec *int     `toml:"default_ttl_sec"`
+	MaxTTLSec     *int     `toml:"max_ttl_sec"`
+	StaticIPs     []string `toml:"static_ips"`
+	StaticMACs    []string `toml:"static_macs"`
 }
 
 type LogConfig struct {
