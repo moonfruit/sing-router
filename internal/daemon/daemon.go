@@ -76,15 +76,7 @@ func Run(ctx context.Context, opts Options) error {
 		deps.Apply = opts.Applier.Apply
 	}
 	deps.Bypass = opts.Bypass
-	mux := NewMux(deps)
-
-	// 鉴权中间件包住【整个】mux：loopback 免 token 全权，LAN 只能走白名单。
-	// 包在最外层而不是逐端点加检查——后者漏一个端点就是全暴露。
-	bypassEnabled := opts.Bypass != nil && opts.Bypass.Enabled
-	handler := AuthMiddleware(mux, AuthConfig{
-		Token:         opts.HTTPToken,
-		BypassEnabled: bypassEnabled,
-	})
+	handler := buildHTTPHandler(deps, opts.HTTPToken)
 
 	// 后台资源同步（gitee → bin/sing-box / var/zoo.raw.json / var/cn.txt）。
 	if opts.Updater != nil {

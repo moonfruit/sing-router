@@ -153,6 +153,15 @@ func NewMux(deps APIDeps) *http.ServeMux {
 	return mux
 }
 
+// buildHTTPHandler 组装 mux 与鉴权中间件。单独提出来而不是内联在 Run 里，
+// 是为了让「中间件必须包住整个 mux」这条安全属性能被测试锁死——内联的话
+// 只能靠人工 review，改坏了测试也不会红。
+func buildHTTPHandler(deps APIDeps, token string) http.Handler {
+	mux := NewMux(deps)
+	bypassEnabled := deps.Bypass != nil && deps.Bypass.Enabled
+	return AuthMiddleware(mux, AuthConfig{Token: token, BypassEnabled: bypassEnabled})
+}
+
 func (deps APIDeps) statusSnapshot() map[string]any {
 	sup := deps.Supervisor
 	snap := map[string]any{
