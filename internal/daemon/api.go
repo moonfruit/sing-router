@@ -28,6 +28,10 @@ type APIDeps struct {
 	StatusExtra  func() map[string]any
 	ScriptByName func(name string) ([]byte, error)
 	ShutdownHook func() // 通常关 ctx 让 main 退出
+
+	// Bypass 非 nil 且 Enabled 时才注册 /api/v1/bypass。未启用时端点根本不存在，
+	// 连 404 之外的信息都不泄露。
+	Bypass *BypassDeps
 }
 
 // NewMux 注册所有端点到一个 http.ServeMux。
@@ -141,6 +145,9 @@ func NewMux(deps APIDeps) *http.ServeMux {
 			go deps.ShutdownHook()
 		}
 	})
+	if deps.Bypass != nil && deps.Bypass.Enabled {
+		mux.HandleFunc("/api/v1/bypass", deps.Bypass.handle)
+	}
 	return mux
 }
 
