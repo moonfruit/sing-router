@@ -87,11 +87,8 @@ func TestInstall_EnableBypassOnExistingDaemonTomlDoesNotActivate(t *testing.T) {
 // 处理（打印"could not verify"并按未生效处理）。
 //
 // 注：这里直接单测 bypassConfigCommitted 而不走完整 install 命令，是因为
-// newInstallCmd 在读取 --gitee-token 覆盖之前也会先 LoadDaemonConfig 一次
-// 且忽略了错误（internal/cli/install.go 里 `cfg, _ := config.LoadDaemonConfig(...)`，
-// 与本次 I1 修复无关的既有行为），一份解析不了的 daemon.toml 会在那一步就
-// 让 cfg 变成 nil、随后访问 cfg.Install.* 触发 panic——这是另一个预先存在、
-// 超出本轮 5 项修复范围的问题，不在这里顺带修。
+// newInstallCmd 在读取 --gitee-token 覆盖之前也会先 LoadDaemonConfig 一次；
+// 这条路径本身对损坏 daemon.toml 的处理见 install_config_load_test.go。
 func TestBypassConfigCommitted_ReadbackFailurePropagatesError(t *testing.T) {
 	rundir := t.TempDir()
 	cfgPath := filepath.Join(rundir, "daemon.toml")

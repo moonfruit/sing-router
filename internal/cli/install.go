@@ -50,7 +50,22 @@ func newInstallCmd() *cobra.Command {
 			if err := validateGiteeToken(giteeToken); err != nil {
 				return err
 			}
-			cfg, _ := config.LoadDaemonConfig(filepath.Join(rundir, "daemon.toml"))
+			// LoadDaemonConfig 的契约：daemon.toml 不存在 → 返回默认 cfg、nil error
+			// （首次 install 走的就是这条路径，daemon.toml 还没被渲染出来）；
+			// daemon.toml 存在但读取/解析失败 → 返回 (nil, err)。之前这里用 `_`
+			// 吞掉了 err，损坏的 daemon.toml（比如手工编辑写坏语法）会让 cfg 是
+			// nil，紧接着下面的 cfg.Install.* 解引用直接 panic，用户看到的是一段
+			// Go 堆栈而不是"配置文件哪里错了"。
+			//
+			// 这里选择报错退出而不是回退默认值继续：install 后续要读
+			// cfg.Install.DownloadSingBox / DownloadCNList / AutoStart / Firmware
+			// 来决定实际动作，配置损坏时静默用默认值等于无视用户已有设置、可能
+			// 做出与用户意图相反的操作（比如把已经关掉的 auto_start 又打开）。
+			// 让用户先修好配置文件更安全。
+			cfg, err := config.LoadDaemonConfig(filepath.Join(rundir, "daemon.toml"))
+			if err != nil {
+				return fmt.Errorf("read daemon.toml at %s: %w", filepath.Join(rundir, "daemon.toml"), err)
+			}
 			// CLI --gitee-token 视作 cfg 的运行时覆盖，与 SING_ROUTER_GITEE_TOKEN 同源。
 			// cfg 在 SeedDefaults 之前加载；首次 install 时 daemon.toml 尚未渲染，
 			// 缺这一步则 cfg.Gitee.Token 永远为空，下方的 token 校验与 syncpkg.NewUpdater
