@@ -264,24 +264,31 @@ ex "grep -q 'listen          = \"0.0.0.0:9998\"' /opt/home/sing-router/daemon.to
 # token）时跑；无 token 时打印 SKIP，避免把"fake-sing-box 天生做不到"误判成
 # bypass 功能的回归，也避免拖垮 docker-test「无 token 也能跑通全流程」的既有
 # 契约（见文件头注释与 Phase E 同款处理）。
+# wait_running <超时秒数> —— 轮询 sing-router status 直到 state=running。
+# G1（首次启动）与 G4（restart 之后）共用：真 sing-box 冷启要做 cache-file
+# 加载 + rule-set 下载 + router 启动，Restart 本身又是完整的 Shutdown+Startup，
+# 两者都可能耗到 30s 量级（同 CLAUDE.md「Ready check 默认 60s 总超时」一节，
+# Phase E 也是这么等的）。固定 sleep 在这里量过是不够的：会在 startup.sh 跑完
+# 之前就去查 ipset/iptables，导致断言假性 FAIL。
+wait_running() {
+    local timeout_sec=$1
+    local elapsed=0
+    while [ "$elapsed" -lt "$timeout_sec" ]; do
+        if docker exec "$cid" sing-router status 2>/dev/null | grep -qE 'state=running'; then
+            return 0
+        fi
+        sleep 2
+        elapsed=$((elapsed + 2))
+    done
+    return 1
+}
+
 if [ "$sing_box_source" = "real (gitee download)" ]; then
     ex "/opt/etc/init.d/S99sing-router start >/dev/null 2>&1 || true"
     # init.d start 只是把 daemon fork 到后台就返回；真正跑 startup.sh 要等
-    # Supervisor.Startup 内部的 ready check 通过——真 sing-box 冷启要做
-    # cache-file 加载 + rule-set 下载 + router 启动，整体可达 30s+（同
-    # CLAUDE.md「Ready check 默认 60s 总超时」一节，Phase E 也是这么等的）。
-    # 这里改成轮询而不是固定 sleep：量过 sleep 5 不够，会在 startup.sh 跑完
-    # 之前就去查 ipset，导致 G1 假性 FAIL。
+    # wait_running 轮询到 state=running。
     echo "waiting up to 30s for bypass daemon to reach state=running..."
-    ready=0
-    for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
-        if docker exec "$cid" sing-router status 2>/dev/null | grep -qE 'state=running'; then
-            ready=1
-            break
-        fi
-        sleep 2
-    done
-    if [ "$ready" != 1 ]; then
+    if ! wait_running 30; then
         echo "FAIL: bypass daemon did not reach state=running within 30s; recent log:"
         docker exec "$cid" tail -40 /opt/home/sing-router/log/sing-router.log 2>&1 || true
         exit 1
@@ -324,8 +331,25 @@ if [ "$sing_box_source" = "real (gitee download)" ]; then
     echo "G3 ok: entry registered with timeout"
 
     # --- G4: Restart 后租约存活（本设计最关键的行为）---
-    ex "/opt/sbin/sing-router restart >/dev/null 2>&1 || true"
-    sleep 3
+    # /api/v1/restart 是同步的：daemon 侧阻塞到 Shutdown+Startup 全部跑完才
+    # 回包，CLI 侧的 HTTP 请求也跟着阻塞，正常情况下这里不需要重试。但 CLI
+    # 的 HTTP 客户端超时是 30s（internal/cli/httpclient.go），而 ready check
+    # 总超时上限是 60s——如果某次 restart 恰好卡到接近 30s，客户端超时会取消
+    # r.Context()，Startup 可能半途而废。之前这里用 `|| true` 吞掉了 restart
+    # 自身的错误码，一旦真的超时/失败，只会让下面的断言以让人困惑的方式间接
+    # FAIL；改成先检查 restart 命令本身的退出码，失败就直接报清楚原因。
+    if ! restart_out=$(ex "/opt/sbin/sing-router restart" 2>&1); then
+        echo "FAIL: sing-router restart itself failed:"
+        echo "$restart_out"
+        exit 1
+    fi
+    # restart 命令返回时 daemon 应已进入 state=running；这里仍轮询而不是直接
+    # 断言，避免 HTTP 回包与 daemon 内部状态更新之间的极小时间窗口造成假红。
+    if ! wait_running 30; then
+        echo "FAIL: daemon did not reach state=running within 30s after restart; recent log:"
+        docker exec "$cid" tail -40 /opt/home/sing-router/log/sing-router.log 2>&1 || true
+        exit 1
+    fi
     ex "ipset list client_bypass | grep -q '192.168.99.7 timeout'" \
         || { echo "FAIL: lease lost across restart -- teardown must NOT destroy client_bypass"; exit 1; }
     ex "iptables -t nat -S sing-box | grep -q 'match-set client_bypass src.*RETURN'" \
