@@ -372,7 +372,7 @@ func findInterferers(prior []iptRule, ours interfererTarget) []iptRule {
 // ----------------------- 顶层入口 -----------------------
 
 // checkRouting 跑全套运行时网络规则检查；非 root 则跳过。
-func checkRouting(r config.Routing) []doctorCheck {
+func checkRouting(r config.Routing, b config.Bypass) []doctorCheck {
 	if os.Geteuid() != 0 {
 		return []doctorCheck{{
 			Name:   "routing checks",
@@ -387,6 +387,7 @@ func checkRouting(r config.Routing) []doctorCheck {
 	out = append(out, checkIptablesChains(r)...)
 	out = append(out, checkRejectFallbacks(r)...)
 	out = append(out, checkUPnPJumps()...)
+	out = append(out, checkClientBypass(b)...)
 	return out
 }
 
