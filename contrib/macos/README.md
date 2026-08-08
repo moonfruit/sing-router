@@ -57,12 +57,16 @@ launchd 本身不轮转这个文件——笔记本频繁换网环境时状态变
 
 ```
 # logfilename                           [owner:group]  mode  count  size(KB)  when  flags
-/var/log/moonfruit.sing-bypass.log      root:wheel     644   7      1000      *     J
+/var/log/moonfruit.sing-bypass.log      root:wheel     644   7      1000      *     Z
 ```
 
-含义：保留 7 份历史、单份超过 1000KB 就轮转、`J` 表示轮转后 gzip 压缩、
+含义：保留 7 份历史、单份超过 1000KB 就轮转、`Z` 表示轮转后 gzip 压缩、
 `when` 用 `*` 表示只看 size 不看时间。`newsyslog` 由系统的周期性任务自动
 触发，不需要额外安装或启用服务。
+
+（`newsyslog.conf(5)` 里 `J` 对应的是 bzip2、`Z` 才是 gzip；这里选 `Z` 是因为
+日志是纯文本，gzip 排查时 `zcat`/`zless` 随手可用，bzip2 压缩率优势对这种
+体量的日志没有意义，解压反而更慢。）
 
 ## 验证
 
