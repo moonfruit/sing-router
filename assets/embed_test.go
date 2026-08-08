@@ -293,6 +293,28 @@ func TestTeardownKeepsDynamicClientBypassSet(t *testing.T) {
 	}
 }
 
+func TestDaemonTomlTemplateHasBypassSection(t *testing.T) {
+	data, err := ReadFile("daemon.toml.tmpl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(data)
+	for _, want := range []string{
+		"[bypass]",
+		"{{ .BypassEnabled }}",
+		"{{ .HTTPListen }}",
+		"{{ .HTTPToken }}",
+		"default_ttl_sec",
+		"max_ttl_sec",
+		"static_ips",
+		"static_macs",
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("daemon.toml.tmpl missing %q", want)
+		}
+	}
+}
+
 // set -eu 下 `[ -n "$X" ] && cmd` 在条件为假时整体退出码为 1，会掀掉整个脚本。
 func TestEmbeddedShellScriptsNoAndListGuards(t *testing.T) {
 	for _, name := range []string{"shell/startup.sh", "shell/teardown.sh"} {

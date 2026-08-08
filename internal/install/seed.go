@@ -22,6 +22,9 @@ type TemplateVars struct {
 	AutoStart       bool
 	Firmware        string // "koolshare" | "merlin"
 	GiteeToken      string // [gitee].token；空字符串 → 渲染为 token = ""，与历史行为一致
+	HTTPListen      string // [http].listen；空字符串 → 回填 "127.0.0.1:9998"
+	HTTPToken       string // [http].token；空字符串 → 渲染为 token = ""
+	BypassEnabled   bool   // [bypass].enabled
 }
 
 // followBinaryFixedSeeds 是"跟随二进制刷新"里路径固定的那部分。
@@ -190,6 +193,9 @@ func binaryMtime() time.Time {
 }
 
 func renderDaemonToml(vars TemplateVars) ([]byte, error) {
+	if vars.HTTPListen == "" {
+		vars.HTTPListen = "127.0.0.1:9998"
+	}
 	raw, err := assets.ReadFile("daemon.toml.tmpl")
 	if err != nil {
 		return nil, err

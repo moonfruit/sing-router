@@ -3,6 +3,8 @@ package cli
 import (
 	"bufio"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
@@ -35,6 +37,8 @@ func newInstallCmd() *cobra.Command {
 		debugOnly         bool
 		giteeToken        string
 		binaryPath        string
+		enableBypass      bool
+		httpToken         string
 	)
 	cmd := &cobra.Command{
 		Use:   "install",
@@ -91,12 +95,28 @@ func newInstallCmd() *cobra.Command {
 			if err := run("ensure rundir layout", func() error { return install.EnsureLayout(rundir) }); err != nil {
 				return err
 			}
+			// bypass 的身份完全来自 token，没有 token 就不该启用。用户没给就
+			// 生成一个，并在结尾打印出来让他拷到客户端。
+			if enableBypass && httpToken == "" {
+				generated, err := generateHTTPToken()
+				if err != nil {
+					return fmt.Errorf("generate http token: %w", err)
+				}
+				httpToken = generated
+			}
+			httpListen := "127.0.0.1:9998"
+			if enableBypass {
+				httpListen = "0.0.0.0:9998"
+			}
 			vars := install.TemplateVars{
 				DownloadSingBox: downloadSingBox,
 				DownloadCNList:  downloadCNList,
 				AutoStart:       autoStart,
 				Firmware:        string(kind),
 				GiteeToken:      giteeToken,
+				HTTPListen:      httpListen,
+				HTTPToken:       httpToken,
+				BypassEnabled:   enableBypass,
 			}
 			if err := run("seed default config/* and render daemon.toml", func() error {
 				return install.SeedDefaults(rundir, vars)
@@ -186,6 +206,13 @@ func newInstallCmd() *cobra.Command {
 				}
 			}
 
+			if enableBypass {
+				fmt.Fprintf(cmd.OutOrStdout(),
+					"\nLAN client bypass enabled.\n  listen: %s\n  token:  %s\n"+
+						"Copy this token into the client agent config (contrib/macos/bypass-agent.conf).\n",
+					httpListen, httpToken)
+			}
+
 			fmt.Fprintln(cmd.OutOrStdout())
 			if debugOnly {
 				fmt.Fprintln(cmd.OutOrStdout(), "Debug seed complete. To run the daemon in the foreground:")
@@ -221,7 +248,20 @@ func newInstallCmd() *cobra.Command {
 		"Gitee private repo access token. On first install, written into [gitee].token of daemon.toml. "+
 			"On re-install, used as a runtime override for downloads in this command (daemon.toml is left untouched; "+
 			"edit it directly or set SING_ROUTER_GITEE_TOKEN to persist).")
+	cmd.Flags().BoolVar(&enableBypass, "enable-bypass", false,
+		"Enable LAN client bypass registration (opens [http].listen to 0.0.0.0 and requires a token)")
+	cmd.Flags().StringVar(&httpToken, "http-token", "",
+		"Token for LAN API auth; auto-generated when --enable-bypass is set and this is empty")
 	return cmd
+}
+
+// generateHTTPToken 生成 32 hex 字符（16 字节）的随机 token。
+func generateHTTPToken() (string, error) {
+	buf := make([]byte, 16)
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(buf), nil
 }
 
 // resolveInstallBinary picks the absolute path to bake into the nat-start
