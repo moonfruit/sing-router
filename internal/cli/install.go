@@ -207,12 +207,47 @@ func newInstallCmd() *cobra.Command {
 			}
 
 			switch {
-			case enableBypass:
+			case enableBypass && dryRun:
+				// dry-run 从没真正写过 daemon.toml（run() 在 dryRun 时跳过 fn()），
+				// 回读校验在这里必然是假阴性，所以单独给一条"预览"措辞，不去动
+				// 下面 committed 分支的真实校验逻辑。
 				fmt.Fprintf(cmd.OutOrStdout(),
-					"\nLAN client bypass enabled.\n  listen: %s\n  token:  %s\n"+
-						"Copy this token into the client agent config (contrib/macos/bypass-agent.conf).\n"+
-						"Keep this token secret: don't paste it into a public issue, chat log, or CI output.\n",
+					"\n[dry-run] would enable LAN client bypass.\n  listen: %s\n  token:  %s\n",
 					httpListen, httpToken)
+			case enableBypass:
+				// writeDefaultAndSeed 是三态语义：daemon.toml 已存在且内容不同的机器
+				// 上，新内容只落到 daemon.toml.default，daemon.toml 原样不动——这是
+				// 真机的常见场景（早就装过 sing-router，现在想开 bypass）。回读刚写
+				// 完的 daemon.toml，确认 [bypass].enabled 与 [http].token 真的落地了
+				// 再打印"enabled"，否则用户会以为配置生效了，实际 LAN 客户端心跳会
+				// 拿到 connection refused，且完全看不出原因。
+				committed, verifyErr := bypassConfigCommitted(rundir, httpToken)
+				if verifyErr == nil && committed {
+					fmt.Fprintf(cmd.OutOrStdout(),
+						"\nLAN client bypass enabled.\n  listen: %s\n  token:  %s\n"+
+							"Copy this token into the client agent config (contrib/macos/bypass-agent.conf).\n"+
+							"Keep this token secret: don't paste it into a public issue, chat log, or CI output.\n",
+						httpListen, httpToken)
+				} else {
+					cfgPath := filepath.Join(rundir, "daemon.toml")
+					defaultPath := cfgPath + ".default"
+					fmt.Fprintf(cmd.OutOrStdout(),
+						"\nLAN client bypass is NOT active yet.\n"+
+							"%s already existed, so install left it untouched; the newly rendered\n"+
+							"config (with bypass enabled) was written to %s instead.\n"+
+							"To activate bypass, manually merge these three settings into your existing\n"+
+							"%s (then restart sing-router):\n"+
+							"  [bypass].enabled = true\n"+
+							"  [http].listen = %q\n"+
+							"  [http].token = %q\n"+
+							"(or diff %s against %s to merge by hand)\n"+
+							"Keep this token secret: don't paste it into a public issue, chat log, or CI output.\n",
+						cfgPath, defaultPath, cfgPath, httpListen, httpToken, defaultPath, cfgPath)
+					if verifyErr != nil {
+						fmt.Fprintf(cmd.OutOrStdout(),
+							"(could not verify %s: %v; treating as not activated)\n", cfgPath, verifyErr)
+					}
+				}
 			case httpToken != "":
 				// 没给 --enable-bypass，[bypass].enabled 恒为 false，AuthMiddleware
 				// 对非 loopback 请求一律 403、根本不看 token；[http].listen 也还是
@@ -264,6 +299,24 @@ func newInstallCmd() *cobra.Command {
 	cmd.Flags().StringVar(&httpToken, "http-token", "",
 		"Token for LAN API auth; auto-generated when --enable-bypass is set and this is empty")
 	return cmd
+}
+
+// bypassConfigCommitted 回读刚写完的 daemon.toml，确认 [bypass].enabled 与
+// [http].token 真的按本次 install 的意图落地了。
+//
+// 之所以需要这一步：install.go 结尾之前无条件打印"LAN client bypass
+// enabled."横幅，但 SeedDefaults→writeDefaultAndSeed 是三态语义——daemon.toml
+// 已存在且内容不同（真机 100% 是这种场景：早装过 sing-router，现在想开
+// bypass）时只会把新内容写到 daemon.toml.default，daemon.toml 原样不动。不
+// 回读校验的话，用户会拿着一条"已生效"的横幅，去配一个连不上的客户端。
+//
+// 回读失败（文件读不到 / 解析错）时调用方按不一致处理，不静默。
+func bypassConfigCommitted(rundir, token string) (bool, error) {
+	cfg, err := config.LoadDaemonConfig(filepath.Join(rundir, "daemon.toml"))
+	if err != nil {
+		return false, err
+	}
+	return cfg.Bypass.Enabled && cfg.HTTP.Token == token, nil
 }
 
 // generateHTTPToken 生成 32 hex 字符（16 字节）的随机 token。

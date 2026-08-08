@@ -138,20 +138,27 @@ func TestAPIApplyResourceQuery(t *testing.T) {
 
 // ServeHTTP 必须只监听 IPv4。路由器的 v6 地址是公网直接可达的（没有 NAT
 // 兜底），一旦监听 v6，管理 API 就挂在公网上了。
+//
+// 【必须用 wildcard 地址，不能用 127.0.0.1】Go 的 favoriteAddrFamily 对
+// "127.0.0.1" 这种显式 v4 地址在 net.Listen("tcp", ...) 下也会选 AF_INET——
+// 把 ServeHTTP 里的 net.Listen("tcp4", ...) 整个 revert 成 net.Listen("tcp", ...)，
+// 用 127.0.0.1 绑的这条测试照样是绿的，完全测不出双栈回归。0.0.0.0 才会真正
+// 触发 net.Listen("tcp", ...) 的双栈监听行为，这条测试的价值全靠它。
 func TestServeHTTPListensOnIPv4Only(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	mux := NewMux(APIDeps{Supervisor: newTestSupervisor(t), Version: "t", Rundir: "/tmp"})
 	port := freePort(t)
-	addr := fmt.Sprintf("127.0.0.1:%d", port)
+	listenAddr := fmt.Sprintf("0.0.0.0:%d", port)
+	dialAddr := fmt.Sprintf("127.0.0.1:%d", port)
 	done := make(chan error, 1)
-	go func() { done <- ServeHTTP(ctx, mux, addr) }()
+	go func() { done <- ServeHTTP(ctx, mux, listenAddr) }()
 
 	// 等 listener 就绪
 	var resp *http.Response
 	var err error
 	for i := 0; i < 50; i++ {
-		resp, err = http.Get("http://" + addr + "/api/v1/status")
+		resp, err = http.Get("http://" + dialAddr + "/api/v1/status")
 		if err == nil {
 			break
 		}
