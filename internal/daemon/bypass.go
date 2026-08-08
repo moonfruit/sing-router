@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -9,6 +10,8 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+
+	"github.com/moonfruit/sing2seq/clef"
 )
 
 // ClientBypassSet 是动态租约 ipset 的名字。
@@ -36,6 +39,12 @@ type BypassDeps struct {
 	IpsetRun func(ctx context.Context, args ...string) error
 	// IpsetList 返回 `ipset list <set>` 的原始输出；nil 时用 realIpsetList。
 	IpsetList func(ctx context.Context, set string) (string, error)
+
+	// Emitter 可选；非 nil 时 ipset 调用失败会发一条 bypass.ipset_failed 事件，
+	// 落进本地 log / seq。为 nil 时静默跳过（测试路径不注入 Emitter）——此前
+	// 失败只出现在 HTTP 响应体里，daemon 侧无任何痕迹，doctor 只能报「set
+	// missing」，看不出原因。
+	Emitter *clef.Emitter
 }
 
 type bypassRequest struct {
@@ -43,15 +52,33 @@ type bypassRequest struct {
 	TTLSec *int     `json:"ttl_sec"`
 }
 
+// maxIpsetStderrBytes 截断喂进 error 里的 stderr，防止一次异常输出把日志/
+// HTTP 响应体撑爆。
+const maxIpsetStderrBytes = 512
+
 // realIpsetRun 直接把 argv 交给 ipset，不经 shell 解析——IP 已过 net.ParseIP
 // 校验，argv 形式再免疫一层注入。
 //
 // 【只看退出码】目标设备上 ipset userspace(v7.6) 比内核(protocol 6) 新，每次
 // 调用都可能往 stderr 打 "Warning: Kernel support protocol versions 6-6 while
 // userspace supports protocol versions 6-7"。把 stderr 非空当失败会让每一次
-// 心跳续约都报错。
+// 心跳续约都报错——判定成败只看退出码，不受此影响。
+//
+// 捕获 stderr 仅用于错误信息（失败时排障用），不参与成败判定：exec.Cmd.Run()
+// 只在非零退出码时返回 error，stderr 内容不会改变这一点。之前 stderr 被整个
+// 丢弃，失败时只剩一句 "exit status 1"，排障要靠猜。
 func realIpsetRun(ctx context.Context, args ...string) error {
-	if err := exec.CommandContext(ctx, "ipset", args...).Run(); err != nil {
+	cmd := exec.CommandContext(ctx, "ipset", args...)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		msg := strings.TrimSpace(stderr.String())
+		if len(msg) > maxIpsetStderrBytes {
+			msg = msg[:maxIpsetStderrBytes] + "...(truncated)"
+		}
+		if msg != "" {
+			return fmt.Errorf("ipset %s: %w: %s", strings.Join(args, " "), err, msg)
+		}
 		return fmt.Errorf("ipset %s: %w", strings.Join(args, " "), err)
 	}
 	return nil
@@ -77,6 +104,35 @@ func (d BypassDeps) list() func(context.Context, string) (string, error) {
 		return d.IpsetList
 	}
 	return realIpsetList
+}
+
+// reportIpsetFailure 发一条 bypass.ipset_failed 事件，落进本地 log / seq。
+// d.Emitter 为 nil 时跳过（测试路径不注入 Emitter）。
+func (d BypassDeps) reportIpsetFailure(op string, err error) {
+	if d.Emitter == nil {
+		return
+	}
+	d.Emitter.Warn("bypass", "bypass.ipset_failed", "ipset {Op} failed: {Err}",
+		map[string]any{"Op": op, "Err": err.Error()})
+}
+
+// EnsureSet 在 daemon 启动早期（HTTP listener 起来之前）确保动态租约 set 已
+// 存在。不这样做的话，client_bypass 只由 startup.sh 创建——而 startup.sh 要
+// 等 Supervisor.Startup 走完 ready check（默认总超时 60s）才跑，HTTP listener
+// 起得早得多：冷启动窗口内客户端心跳会全部拿到 500；auto_start=false、拿不到
+// sing-box、或 sing-box 崩溃循环时甚至永久 500。
+//
+// -exist 幂等，startup.sh 之后还会再建一次不受影响；这里失败只记 warn，不阻止
+// daemon 启动——真正兜底还是 startup.sh。
+func (d BypassDeps) EnsureSet(ctx context.Context) {
+	if !d.Enabled {
+		return
+	}
+	run := d.run()
+	if err := run(ctx, "-exist", "create", ClientBypassSet, "hash:ip",
+		"timeout", strconv.Itoa(d.DefaultTTLSec)); err != nil {
+		d.reportIpsetFailure("create", err)
+	}
 }
 
 func (d BypassDeps) handle(w http.ResponseWriter, r *http.Request) {
@@ -170,6 +226,7 @@ func (d BypassDeps) handleRegister(w http.ResponseWriter, r *http.Request) {
 		// 两种情况续约效果等价，客户端无需关心条目当前是否存在。
 		if err := run(r.Context(), "-exist", "add", ClientBypassSet, ip,
 			"timeout", strconv.Itoa(ttl)); err != nil {
+			d.reportIpsetFailure("add", err)
 			writeError(w, http.StatusInternalServerError, "bypass.ipset_failed", err.Error(),
 				map[string]any{"succeeded": succeeded})
 			return
@@ -193,6 +250,7 @@ func (d BypassDeps) handleRevoke(w http.ResponseWriter, r *http.Request) {
 		// -exist 让「删一个本就不存在的条目」不报错——客户端注销时条目可能
 		// 已经自行过期了，那不是错误。
 		if err := run(r.Context(), "-exist", "del", ClientBypassSet, ip); err != nil {
+			d.reportIpsetFailure("del", err)
 			writeError(w, http.StatusInternalServerError, "bypass.ipset_failed", err.Error(),
 				map[string]any{"succeeded": succeeded})
 			return
@@ -205,6 +263,7 @@ func (d BypassDeps) handleRevoke(w http.ResponseWriter, r *http.Request) {
 func (d BypassDeps) handleList(w http.ResponseWriter, r *http.Request) {
 	out, err := d.list()(r.Context(), ClientBypassSet)
 	if err != nil {
+		d.reportIpsetFailure("list", err)
 		writeError(w, http.StatusInternalServerError, "bypass.ipset_failed", err.Error(), nil)
 		return
 	}

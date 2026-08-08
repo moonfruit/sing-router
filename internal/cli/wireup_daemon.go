@@ -188,6 +188,17 @@ func realRunDaemon(ctx context.Context, rundir string) error {
 			map[string]any{"Listen": cfg.HTTP.Listen})
 	}
 
+	bypassDeps := &daemon.BypassDeps{
+		Enabled:       bypassCfg.Enabled,
+		DefaultTTLSec: bypassCfg.DefaultTTLSec,
+		MaxTTLSec:     bypassCfg.MaxTTLSec,
+		Emitter:       em,
+	}
+	// 在 HTTP listener 起来之前把动态租约 set 建好（见 BypassDeps.EnsureSet 注释）：
+	// 否则 client_bypass 只由 startup.sh 创建，而 startup.sh 要等 ready check
+	// 走完（默认上限 60s）才跑，冷启动窗口内客户端心跳会全部拿到 500。
+	bypassDeps.EnsureSet(ctx)
+
 	routing := config.LoadRouting(cfg)
 	cnPath := filepath.Join(rundir, "var", "cn.txt")
 	runner := shell.NewRunner(shell.RunnerConfig{
@@ -313,11 +324,7 @@ func realRunDaemon(ctx context.Context, rundir string) error {
 		Applier:    applier,
 		Notifier:   notifier,
 		HTTPToken:  cfg.HTTP.Token,
-		Bypass: &daemon.BypassDeps{
-			Enabled:       bypassCfg.Enabled,
-			DefaultTTLSec: bypassCfg.DefaultTTLSec,
-			MaxTTLSec:     bypassCfg.MaxTTLSec,
-		},
+		Bypass:     bypassDeps,
 		Sync: daemon.SyncLoopConfig{
 			IntervalSec:           cfg.Sync.SyncIntervalSeconds(),
 			OnStartDelaySec:       cfg.Sync.SyncOnStartDelaySec(),
