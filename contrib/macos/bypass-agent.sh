@@ -25,10 +25,10 @@ fi
 : "${TOKEN:?TOKEN not set}"
 : "${GATEWAY:?GATEWAY not set}"
 LOCAL_CLASH_API="${LOCAL_CLASH_API:-http://127.0.0.1:9999}"
-TTL="${TTL:-120}"
+TTL="${TTL:-240}"
 STATE_FILE="${STATE_FILE:-/var/run/sing-bypass-agent.ip}"
 
-# 只在状态变化时说话：每 30s 一次、一天 2880 次，稳态输出会把日志刷爆。
+# 只在状态变化时说话：每 60s 一次、一天 1440 次，稳态输出会把日志刷爆。
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S') $*"; }
 
 revoke() {

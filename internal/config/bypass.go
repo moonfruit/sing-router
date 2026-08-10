@@ -24,7 +24,7 @@ type Bypass struct {
 func DefaultBypass() Bypass {
 	return Bypass{
 		Enabled:       false,
-		DefaultTTLSec: 120,
+		DefaultTTLSec: 240,
 		MaxTTLSec:     600,
 	}
 }

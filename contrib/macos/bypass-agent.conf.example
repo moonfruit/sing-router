@@ -15,7 +15,7 @@ LOCAL_CLASH_API="http://127.0.0.1:9999"
 
 # 申请的租约秒数，须 <= 路由器的 [bypass].max_ttl_sec。
 # 建议约为 launchd StartInterval 的 4 倍，留足重试余量。
-TTL="120"
+TTL="240"
 
 # 上次注册 IP 的记录，用于地址变化时立刻注销旧值。
 STATE_FILE="/var/run/sing-bypass-agent.ip"

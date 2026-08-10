@@ -10,7 +10,7 @@ func TestDefaultBypassIsDisabled(t *testing.T) {
 	if b.Enabled {
 		t.Fatal("bypass must default to disabled")
 	}
-	if b.DefaultTTLSec != 120 || b.MaxTTLSec != 600 {
+	if b.DefaultTTLSec != 240 || b.MaxTTLSec != 600 {
 		t.Fatalf("default ttl = %d, max ttl = %d", b.DefaultTTLSec, b.MaxTTLSec)
 	}
 }
@@ -154,7 +154,7 @@ func TestEnvVarsEnabledJoinsListsWithSpace(t *testing.T) {
 	if env["CLIENT_BYPASS_ENABLED"] != "1" {
 		t.Fatalf("enabled flag = %q", env["CLIENT_BYPASS_ENABLED"])
 	}
-	if env["CLIENT_BYPASS_TTL"] != "120" {
+	if env["CLIENT_BYPASS_TTL"] != "240" {
 		t.Fatalf("ttl = %q", env["CLIENT_BYPASS_TTL"])
 	}
 	if env["CLIENT_BYPASS_STATIC_IPS"] != "192.168.50.7 192.168.50.8" {

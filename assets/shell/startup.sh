@@ -21,7 +21,7 @@ set -eu
 
 CN_IP_CIDR="${CN_IP_CIDR:-}"
 CLIENT_BYPASS_ENABLED="${CLIENT_BYPASS_ENABLED:-}"
-CLIENT_BYPASS_TTL="${CLIENT_BYPASS_TTL:-120}"
+CLIENT_BYPASS_TTL="${CLIENT_BYPASS_TTL:-240}"
 CLIENT_BYPASS_STATIC_IPS="${CLIENT_BYPASS_STATIC_IPS:-}"
 CLIENT_BYPASS_STATIC_MACS="${CLIENT_BYPASS_STATIC_MACS:-}"
 
@@ -44,7 +44,7 @@ fi
 if [ -n "$CLIENT_BYPASS_ENABLED" ]; then
     # 动态租约 set：create 幂等且【不清空】。租约是客户端持续心跳声明的状态，
     # 不能被 Restart (Shutdown+Startup) 冲掉——ready check 最长 60s，加上客户端
-    # 下一轮心跳 30s，清掉就意味着最坏约 90s 被误代理。过期交给内核 timeout。
+    # 下一轮心跳 60s，清掉就意味着最坏约 120s 被误代理。过期交给内核 timeout。
     ipset create client_bypass hash:ip timeout "$CLIENT_BYPASS_TTL" 2>/dev/null || true
 
     # 静态 set：配置驱动，flush 后重填，保证配置里删掉的条目立刻失效。
