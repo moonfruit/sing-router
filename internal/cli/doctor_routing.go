@@ -384,10 +384,13 @@ func checkRouting(r config.Routing, b config.Bypass) []doctorCheck {
 	out = append(out, checkTunDevice(r.Tun)...)
 	out = append(out, checkIPRule(r)...)
 	out = append(out, checkIPRoute(r)...)
-	out = append(out, checkIptablesChains(r)...)
+	// ipset 排在 iptables 之前：链里的 `-m set --match-set` 引用它们，set 缺失
+	// 时后面那些 RETURN 的 fail 才有根因可循。RETURN 规则本身不在这里report——
+	// 它们跟着各自的子链走（见 checkIptablesChains）。
+	out = append(out, checkBypassSets(b)...)
+	out = append(out, checkIptablesChains(r, b)...)
 	out = append(out, checkRejectFallbacks(r)...)
 	out = append(out, checkUPnPJumps()...)
-	out = append(out, checkClientBypass(b)...)
 	return out
 }
 
@@ -586,7 +589,7 @@ func matchJump(rule iptRule, want expectedJump) bool {
 	return true
 }
 
-func checkIptablesChains(r config.Routing) []doctorCheck {
+func checkIptablesChains(r config.Routing, b config.Bypass) []doctorCheck {
 	var checks []doctorCheck
 	// 三大父链按 table 缓存，避免重复调用 iptables -S。
 	type key struct{ table, chain string }
@@ -705,19 +708,29 @@ func checkIptablesChains(r config.Routing) []doctorCheck {
 			continue
 		}
 		rules := parseIptablesS(out)
-		if len(rules) < sc.MinRules {
-			checks = append(checks, doctorCheck{
-				Name:   "iptables " + sc.Table + "/" + sc.Chain,
-				Status: "warn",
-				Detail: fmt.Sprintf("%d rules; expected ≥%d (startup.sh may have stopped early)", len(rules), sc.MinRules),
-			})
-		} else {
-			checks = append(checks, doctorCheck{
-				Name:   "iptables " + sc.Table + "/" + sc.Chain,
-				Status: "pass",
-				Detail: fmt.Sprintf("%d rules", len(rules)),
-			})
+		chainRow := doctorCheck{
+			Name:   "iptables " + sc.Table + "/" + sc.Chain,
+			Status: "pass",
+			Detail: plural(len(rules), "rule", "rules"),
 		}
+		if len(rules) < sc.MinRules {
+			chainRow.Status = "warn"
+			chainRow.Detail += fmt.Sprintf("; expected ≥%d (startup.sh may have stopped early)", sc.MinRules)
+		}
+
+		// bypass RETURN 就是这条链的头几行，折进本行一起报：全对时只留
+		// "N rules incl. M bypass RETURNs"，有一条装错/装漏才展开到条目级。
+		// 链取不到（上面 continue）时不报——"链不存在"已经是根因，再刷三条
+		// RETURN missing 是噪声。
+		var bypassRows []doctorCheck
+		if b.Enabled {
+			bypassRows = checkBypassReturns(sc.Table, sc.Chain, rules, b)
+		}
+		summary := chainRow
+		if len(bypassRows) > 0 {
+			summary.Detail += " incl. " + plural(len(bypassRows), "bypass RETURN", "bypass RETURNs")
+		}
+		checks = append(checks, collapseChecks(summary, append([]doctorCheck{chainRow}, bypassRows...))...)
 	}
 	return checks
 }

@@ -40,6 +40,22 @@ func findCheck(checks []doctorCheck, namePrefix string) *doctorCheck {
 	return nil
 }
 
+// findCheckExact 按 Name 精确匹配——findCheck 的前缀语义在子链上会误伤：
+// "iptables nat/sing-box" 会先撞上 "iptables nat/sing-box-dns"。
+func findCheckExact(checks []doctorCheck, name string) *doctorCheck {
+	for i := range checks {
+		if checks[i].Name == name {
+			return &checks[i]
+		}
+	}
+	return nil
+}
+
+func mergeCmds(base, extra map[string]cmdResult) map[string]cmdResult {
+	maps.Copy(base, extra)
+	return base
+}
+
 func countStatus(checks []doctorCheck, status string) int {
 	n := 0
 	for _, c := range checks {
@@ -316,7 +332,7 @@ func chainCmds(extra map[string]cmdResult) map[string]cmdResult {
 
 func TestCheckIptablesChains_AllPass(t *testing.T) {
 	stubRunReadOnly(t, chainCmds(nil))
-	checks := checkIptablesChains(config.DefaultRouting())
+	checks := checkIptablesChains(config.DefaultRouting(), config.DefaultBypass())
 	if n := countStatus(checks, "fail"); n > 0 {
 		t.Fatalf("unexpected %d fails: %+v", n, checks)
 	}
@@ -336,7 +352,7 @@ func TestCheckIptablesChains_AcceptBeforeJumpWarns(t *testing.T) {
 	stubRunReadOnly(t, chainCmds(map[string]cmdResult{
 		"iptables -t nat -S PREROUTING": {out: interfered, code: 0},
 	}))
-	checks := checkIptablesChains(config.DefaultRouting())
+	checks := checkIptablesChains(config.DefaultRouting(), config.DefaultBypass())
 	hit := findCheck(checks, "iptables nat/PREROUTING line 1")
 	if hit == nil || hit.Status != "warn" {
 		t.Fatalf("expected warn for line 1 ACCEPT, got %+v", checks)
@@ -348,7 +364,7 @@ func TestCheckIptablesChains_AcceptBeforeJumpWarns(t *testing.T) {
 // 扫描不应把它们报成 "may swallow proxied traffic"。
 func TestCheckIptablesChains_RejectFallbackNotInterferer(t *testing.T) {
 	stubRunReadOnly(t, chainCmds(nil)) // fixtureForward 已含 853 REJECT 前置
-	checks := checkIptablesChains(config.DefaultRouting())
+	checks := checkIptablesChains(config.DefaultRouting(), config.DefaultBypass())
 	for _, c := range checks {
 		if strings.HasPrefix(c.Name, "iptables filter/FORWARD line") {
 			t.Fatalf("own 853 REJECT fallback flagged as interferer: %+v", c)
@@ -366,7 +382,7 @@ func TestCheckIptablesChains_ForeignRejectBeforeAcceptWarns(t *testing.T) {
 	stubRunReadOnly(t, chainCmds(map[string]cmdResult{
 		"iptables -t filter -S FORWARD": {out: foreignReject, code: 0},
 	}))
-	checks := checkIptablesChains(config.DefaultRouting())
+	checks := checkIptablesChains(config.DefaultRouting(), config.DefaultBypass())
 	hit := findCheck(checks, "iptables filter/FORWARD line 1")
 	if hit == nil || hit.Status != "warn" {
 		t.Fatalf("expected warn for foreign 443 REJECT before ACCEPT, got %+v", checks)
@@ -382,7 +398,7 @@ func TestCheckIptablesChains_MissingJumpFails(t *testing.T) {
 	stubRunReadOnly(t, chainCmds(map[string]cmdResult{
 		"iptables -t nat -S PREROUTING": {out: noFakeIP, code: 0},
 	}))
-	checks := checkIptablesChains(config.DefaultRouting())
+	checks := checkIptablesChains(config.DefaultRouting(), config.DefaultBypass())
 	if countStatus(checks, "fail") == 0 {
 		t.Fatalf("expected fail for missing fakeip jump, got %+v", checks)
 	}
@@ -392,7 +408,7 @@ func TestCheckIptablesChains_SubchainMissingFails(t *testing.T) {
 	stubRunReadOnly(t, chainCmds(map[string]cmdResult{
 		"iptables -t nat -S sing-box": {out: "", code: 1, err: fmt.Errorf("No chain/target/match by that name.")},
 	}))
-	checks := checkIptablesChains(config.DefaultRouting())
+	checks := checkIptablesChains(config.DefaultRouting(), config.DefaultBypass())
 	if findCheck(checks, "iptables nat/sing-box") == nil ||
 		findCheck(checks, "iptables nat/sing-box").Status != "fail" {
 		t.Fatalf("expected fail for missing sing-box chain, got %+v", checks)

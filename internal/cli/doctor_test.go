@@ -8,6 +8,7 @@ import (
 
 	"github.com/moonfruit/sing-router/assets"
 	"github.com/moonfruit/sing-router/internal/firmware"
+	"github.com/moonfruit/sing-router/internal/install"
 )
 
 // 回归守护：doctor 必须对每一个内嵌 config fragment 都出一条 fail 级检查。
@@ -54,6 +55,56 @@ func TestDoctorConfigCheckNamesUseSlashPath(t *testing.T) {
 		if strings.HasPrefix(c.Name, "config") && strings.Contains(c.Name, "\\") {
 			t.Errorf("check name %q 含反斜杠，应统一用 / 分隔", c.Name)
 		}
+	}
+}
+
+// rundir 布局与 config fragment 正常时各占十来行 PASS，会把后面真正要看的
+// 运行时检查挤出屏幕——全对就折叠成一行。
+func TestDoctorCollapsesRundirAndConfigWhenAllPass(t *testing.T) {
+	dir := t.TempDir()
+	if err := install.EnsureLayout(dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := install.SeedDefaults(dir, install.TemplateVars{Firmware: "koolshare"}); err != nil {
+		t.Fatal(err)
+	}
+	checks := runDoctorChecks(dir, doctorOpts{skipRouting: true})
+
+	rundir := findCheck(checks, "rundir")
+	if rundir == nil || rundir.Name != "rundir" || rundir.Status != "pass" {
+		t.Fatalf("expected a single collapsed `rundir` pass row, got %+v", checks)
+	}
+	cfg := findCheck(checks, "config")
+	if cfg == nil || cfg.Name != "config" || cfg.Status != "pass" {
+		t.Fatalf("expected a single collapsed `config` pass row, got %+v", checks)
+	}
+	for _, c := range checks {
+		if strings.HasPrefix(c.Name, "rundir/") {
+			t.Errorf("collapsed group must not list individual dirs: %+v", c)
+		}
+		if strings.HasPrefix(c.Name, "config/") {
+			t.Errorf("collapsed group must not list individual fragments: %+v", c)
+		}
+	}
+}
+
+// 折叠只在全 pass 时发生：一旦有具体条目坏了，就只列坏的那些，且不再输出
+// 会读成"这一组都好"的组级 PASS 行。
+func TestCollapseChecksKeepsOnlyFailures(t *testing.T) {
+	group := []doctorCheck{
+		{Name: "a", Status: "pass"},
+		{Name: "b", Status: "fail", Detail: "boom"},
+		{Name: "c", Status: "warn"},
+	}
+	got := collapseChecks(summaryRow("group", "item", "items", group), group)
+	if len(got) != 2 || got[0].Name != "b" || got[1].Name != "c" {
+		t.Fatalf("got %+v, want only the non-pass entries", got)
+	}
+
+	one := group[:1]
+	got = collapseChecks(summaryRow("group", "item", "items", one), one)
+	if len(got) != 1 || got[0].Name != "group" || got[0].Detail != "1 item ok" {
+		t.Fatalf("got %+v, want a single collapsed row", got)
 	}
 }
 

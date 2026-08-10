@@ -72,10 +72,13 @@ func runDoctorChecks(rundir string, opts doctorOpts) []doctorCheck {
 
 	if !opts.rulesOnly {
 		out = append(out, checkExistsExec("/opt/sbin/sing-router"))
-		out = append(out, checkDirExists(rundir, "rundir"))
+
+		dirs := []doctorCheck{checkDirExists(rundir, "rundir")}
 		for _, sub := range []string{"config", "bin", "var", "run", "log"} {
-			out = append(out, checkDirExists(filepath.Join(rundir, sub), "rundir/"+sub))
+			dirs = append(dirs, checkDirExists(filepath.Join(rundir, sub), "rundir/"+sub))
 		}
+		out = append(out, collapseChecks(summaryRow("rundir", "dir", "dirs", dirs), dirs)...)
+
 		out = append(out, checkExistsExec(filepath.Join(rundir, "bin", "sing-box")))
 		// 逐个内嵌 fragment 检查存在性，而不是维护一份手工清单——手工清单必然
 		// 漂移：inline.json（定义 dns.json 引用的 LocalDomain）与 tun.json（tun-in，
@@ -83,9 +86,11 @@ func runDoctorChecks(rundir string, opts doctorOpts) []doctorCheck {
 		if frags, err := install.EmbeddedConfigFragments(); err != nil {
 			out = append(out, doctorCheck{Name: "config/*", Status: "warn", Detail: err.Error()})
 		} else {
+			fragChecks := make([]doctorCheck, 0, len(frags))
 			for _, rel := range frags {
-				out = append(out, checkExistsAs(filepath.Join(rundir, filepath.FromSlash(rel)), rel, "fail"))
+				fragChecks = append(fragChecks, checkExistsAs(filepath.Join(rundir, filepath.FromSlash(rel)), rel, "fail"))
 			}
+			out = append(out, collapseChecks(summaryRow("config", "file", "files", fragChecks), fragChecks)...)
 		}
 		out = append(out, checkExistsAs(filepath.Join(rundir, "var", "cn.txt"), "var/cn.txt", "warn"))
 		out = append(out, checkExistsExec("/opt/etc/init.d/S99sing-router"))
@@ -141,6 +146,48 @@ func runRoutingChecks(cfg *config.DaemonConfig, opts doctorOpts) []doctorCheck {
 		return []doctorCheck{{Name: "routing checks", Status: "info", Detail: "skipped on " + runtime.GOOS}}
 	}
 	return checkRouting(config.LoadRouting(cfg), config.LoadBypass(cfg))
+}
+
+// collapseChecks 把一组"要么全对、要么只关心哪几个错了"的同类检查折叠起来：
+// 全 pass → 只留 summary 一行；否则丢掉 summary，只列非 pass 的具体条目。
+//
+// rundir 布局、config fragment、每条子链里的 bypass RETURN——正常情况下都是
+// 十来行清一色 PASS，逐条铺开会把后面真正要看的检查挤出屏幕；出问题时又必须
+// 精确到条目。JSON 输出走同一条路径：机器读的是"哪些坏了"，坏了的条目名与
+// 折叠前完全一致，不影响下游解析。
+//
+// summary 可以是组内某一条（子链那行就是自己当 summary），也可以是专门造的
+// 汇总行（rundir / config）。前者要把自己也放进 group，否则它自身的 warn
+// 会被折叠吞掉。
+func collapseChecks(summary doctorCheck, group []doctorCheck) []doctorCheck {
+	var bad []doctorCheck
+	for _, c := range group {
+		if c.Status != "pass" {
+			bad = append(bad, c)
+		}
+	}
+	if len(bad) > 0 {
+		return bad
+	}
+	return []doctorCheck{summary}
+}
+
+// summaryRow 造一条"这一组 N 项全对"的汇总行。
+func summaryRow(label, unit, units string, group []doctorCheck) doctorCheck {
+	return doctorCheck{
+		Name:   label,
+		Status: "pass",
+		Detail: plural(len(group), unit, units) + " ok",
+	}
+}
+
+// plural 拼 "1 entry" / "3 entries"——doctor 的 detail 是给人读的，
+// "1 entries" 这种毛刺看多了会让人怀疑数字本身。
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return "1 " + one
+	}
+	return fmt.Sprintf("%d %s", n, many)
 }
 
 func doctorHookCheck(hc firmware.HookCheck) doctorCheck {
