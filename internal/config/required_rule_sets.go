@@ -20,18 +20,22 @@ type RuleSetSource struct {
 }
 
 // DefaultRequiredRuleSets 是当前嵌入的静态 fragment（dns.json 等）所引用、
-// 但不再自行声明的 rule_set 集合。
+// 但不再自行声明的 rule_set 集合。按 Tag 排序，与 Makefile 的 RULE_SETS
+// 及内嵌 assets/var/rules/*.srs 一一对应（TestDefaultRequiredRuleSetsAlignment 守）。
+//
+// 注意 Private / Direct 这类由 gitee 下发的 zoo.json 也会定义的 tag：有 token 时
+// scanProvidedRuleSetTags 会发现已提供、这里不重复补；但 dns.json 的
+// sniff-override-destination 无条件引用它们，无 token 的机器上 zoo 拉不到 →
+// 必须留在本表里做本地兜底，否则 sing-box FATAL rule-set not found。
 var DefaultRequiredRuleSets = []RuleSetSource{
-	{Tag: "GeoIP@CN", GiteePath: "rules/geoip-cn.srs", LocalRelPath: "var/rules/geoip-cn.srs"},
-	{Tag: "GeoSites@CN", GiteePath: "rules/geosites-cn.srs", LocalRelPath: "var/rules/geosites-cn.srs"},
+	{Tag: "Direct", GiteePath: "rules/direct.srs", LocalRelPath: "var/rules/direct.srs"},
 	{Tag: "DoH", GiteePath: "rules/doh.srs", LocalRelPath: "var/rules/doh.srs"},
 	{Tag: "FakeIpBypass", GiteePath: "rules/fakeip-bypass.srs", LocalRelPath: "var/rules/fakeip-bypass.srs"},
-	// Private / Direct 由 gitee 下发的 zoo.json 定义，有 token 时
-	// scanProvidedRuleSetTags 会发现已提供、这里不重复补。但 dns.json 的
-	// sniff-override-destination 无条件引用它们，无 token 的机器上 zoo 拉不到 →
-	// 必须有本地兜底，否则 sing-box FATAL rule-set not found。
+	{Tag: "GeoIP@CN", GiteePath: "rules/geoip-cn.srs", LocalRelPath: "var/rules/geoip-cn.srs"},
+	{Tag: "GeoSites@CN", GiteePath: "rules/geosites-cn.srs", LocalRelPath: "var/rules/geosites-cn.srs"},
+	{Tag: "Lan", GiteePath: "rules/lan.srs", LocalRelPath: "var/rules/lan.srs"},
 	{Tag: "Private", GiteePath: "rules/private.srs", LocalRelPath: "var/rules/private.srs"},
-	{Tag: "Direct", GiteePath: "rules/direct.srs", LocalRelPath: "var/rules/direct.srs"},
+	{Tag: "PublicDNS", GiteePath: "rules/public-dns.srs", LocalRelPath: "var/rules/public-dns.srs"},
 }
 
 // SupplementalRuleSetFile 是 EnsureRequiredRuleSets 自动生成的 fragment 文件名。

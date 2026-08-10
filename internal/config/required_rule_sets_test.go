@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -214,6 +215,85 @@ func TestEmbeddedFragmentsRuleSetsAllResolvable(t *testing.T) {
 				"若真实 zoo.json 也不需要它，应删除该条目", r.Tag)
 		}
 	}
+}
+
+// 回归守护：DefaultRequiredRuleSets / Makefile 的 RULE_SETS / 内嵌
+// assets/var/rules/*.srs 三者必须一一对应。
+//   - 少 srs：无 token 的机器上 EnsureRequiredRuleSets 写出指向不存在文件的
+//     local 条目，sing-box `parse rule-set: no such file` 拒绝启动。
+//   - 少 RULE_SETS：`make update-rule-sets` 悄悄漏掉它，兜底永远停在首次提交的版本。
+//   - 多 srs：没人用的规则集白白撑大二进制（历史上内嵌过用不着的 lan.srs）。
+func TestDefaultRequiredRuleSetsAlignment(t *testing.T) {
+	want := map[string]bool{} // srs 文件名
+	for _, r := range DefaultRequiredRuleSets {
+		base := path.Base(r.GiteePath)
+		if want[base] {
+			t.Errorf("DefaultRequiredRuleSets 里 %s 重复", base)
+		}
+		want[base] = true
+		if r.LocalRelPath != "var/rules/"+base {
+			t.Errorf("rule_set %q 的 LocalRelPath=%q 与 GiteePath=%q 不一致",
+				r.Tag, r.LocalRelPath, r.GiteePath)
+		}
+	}
+
+	assertSameSet(t, "Makefile 的 RULE_SETS", makefileRuleSets(t), want)
+	assertSameSet(t, "内嵌 assets/var/rules", embeddedRuleSetFiles(t), want)
+}
+
+func assertSameSet(t *testing.T, what string, got, want map[string]bool) {
+	t.Helper()
+	for f := range want {
+		if !got[f] {
+			t.Errorf("%s 缺少 %s（DefaultRequiredRuleSets 要它）", what, f)
+		}
+	}
+	for f := range got {
+		if !want[f] {
+			t.Errorf("%s 多出 %s（DefaultRequiredRuleSets 里没人要）", what, f)
+		}
+	}
+}
+
+// makefileRuleSets 解析 Makefile 里 `RULE_SETS ?= a.srs b.srs` 的文件名集合。
+func makefileRuleSets(t *testing.T) map[string]bool {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join("..", "..", "Makefile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for line := range strings.SplitSeq(string(data), "\n") {
+		if !strings.HasPrefix(line, "RULE_SETS") {
+			continue
+		}
+		_, rhs, ok := strings.Cut(line, "=")
+		if !ok {
+			t.Fatalf("Makefile 的 RULE_SETS 行没有 '=': %q", line)
+		}
+		out := map[string]bool{}
+		for f := range strings.FieldsSeq(rhs) {
+			out[f] = true
+		}
+		return out
+	}
+	t.Fatal("Makefile 里找不到 RULE_SETS")
+	return nil
+}
+
+// embeddedRuleSetFiles 列出内嵌 var/rules 下的 *.srs（.etag 是附属产物，跳过）。
+func embeddedRuleSetFiles(t *testing.T) map[string]bool {
+	t.Helper()
+	entries, err := fs.ReadDir(assets.FS(), "var/rules")
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := map[string]bool{}
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".srs") {
+			out[e.Name()] = true
+		}
+	}
+	return out
 }
 
 // collectRuleSetTags 递归收集 JSON 里的 rule_set tag。

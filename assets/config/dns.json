@@ -27,7 +27,7 @@
       { "preferred_by": "dns-hosts", "server": "dns-hosts" },
       // Local
       { "preferred_by": "dns-local", "server": "dns-local", "rewrite_ttl": 3600 },
-      { "domain_suffix": [".lan", ".home.arpa"], "action": "predefined", "rcode": "NXDOMAIN" },
+      { "rule_set": "Lan", "action": "predefined", "rcode": "NXDOMAIN" },
       // Public
       { "rule_set": "PublicDNS", "server": "dns-resolver" },
       // Clash

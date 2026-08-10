@@ -19,13 +19,6 @@
             ]
           }
         ]
-      },
-      {
-        "type": "inline",
-        "tag": "PublicDNS",
-        "rules": [
-          { "domain": ["dns.alidns.com", "doh.pub", "dot.pub", "dns.google", "one.one.one.one", "cloudflare-dns.com"] }
-        ]
       }
     ]
   }

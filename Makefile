@@ -39,7 +39,7 @@ update-cn:
 # 少一个，无 token 的机器上 EnsureRequiredRuleSets 就会写出指向不存在文件的
 # local 条目，sing-box 直接 `parse rule-set: no such file` 拒绝启动。
 # internal/install.TestSeedDefaults_CoversRequiredRuleSetLocalPaths 守这条。
-RULE_SETS    ?= geoip-cn.srs geosites-cn.srs doh.srs fakeip-bypass.srs private.srs direct.srs
+RULE_SETS    ?= direct.srs doh.srs fakeip-bypass.srs geoip-cn.srs geosites-cn.srs lan.srs private.srs public-dns.srs
 GITEE_OWNER  ?= moonfruit
 GITEE_REPO   ?= private
 GITEE_REF    ?= main
