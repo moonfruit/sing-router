@@ -204,6 +204,7 @@ func realRunDaemon(ctx context.Context, rundir string) error {
 	runner := shell.NewRunner(shell.RunnerConfig{
 		Bash: "/bin/bash",
 		Env:  mergedShellEnv(routing, bypassCfg, cnPath),
+		Dir:  rundir,
 	})
 	runner.OnStderr = func(line string) {
 		em.Info("shell", "shell.stderr", "{Line}", map[string]any{"Line": line})
@@ -274,9 +275,12 @@ func realRunDaemon(ctx context.Context, rundir string) error {
 		em.Warn("daemon", "gitee.disabled", "gitee.token empty; background sync disabled", nil)
 	}
 
+	// workDir 传 rundir，与上面 SingBoxDir/SingBoxArgs 给 `run` 的完全一致——
+	// check 与 run 必须用同一个 working directory 解析 external_ui 这类相对路径。
 	checkConfig := func(ctx context.Context) error {
 		return config.CheckSingBoxConfig(ctx,
 			filepath.Join(rundir, cfg.Runtime.SingBoxBinary),
+			rundir,
 			filepath.Join(rundir, cfg.Runtime.ConfigDir))
 	}
 

@@ -89,6 +89,16 @@ sing-box 冷启要做 cache-file 加载 + rule-set 下载 + router 启动，整�
 ### init.d 把 stdout/stderr 重定向到 /dev/null
 固件 init.d (`. /opt/etc/init.d/rc.func`) 的标准做法是 `$PROC $ARGS > /dev/null 2>&1 &`。Go runtime 自身的 `fatal error:` 走默认 fd 2 就被丢进黑洞——事故无痕。`internal/cli/stderr_redirect_linux.go` 用 `syscall.Dup3` 把 fd 2 重定向到 `log/sing-router.err`，darwin 用 no-op stub（`stderr_redirect_other.go`）。**任何 goroutine 都必须自带 `defer recover()`+`reportPanic`**，否则一个未捕获 panic 会拆掉整个 daemon。
 
+### 每个子进程都必须显式指定 cwd（`cmd.Dir = rundir`）
+daemon 是长跑进程（真机上跑过 45 天不重启），而 `$RUNDIR` 位于 U 盘上的 ext4。**存储掉线重挂载后，进程启动时 chdir 到的那个目录会变成悬空引用**：路径字符串 `/opt/home/sing-router` 重新解析没问题，但已经 chdir 进去的进程留在旧 fs 上，对它的任何读写都拿 `EIO`。2026-08-20 的真机事故就是这样——daemon 的 cwd 死在 `/entware/...`，日志静默丢了 12 天，`sing-box check` 读相对路径的 `external_ui`（`"ui"`）拿 EIO，于是每轮 sync 都误判"配置校验失败"并回滚 + 推送 bark 告警，而 `sing-box run` 因为设了 `cmd.Dir` 一直好好的。
+
+所以凡是 fork 子进程、且该子进程会碰 rundir 下相对路径的地方，都要显式设 `cmd.Dir`，不能吃 daemon 自身 cwd 的旧账：
+- `internal/daemon/supervisor.go`：`cmd.Dir = s.cfg.SingBoxDir` + args 带 `-D rundir`
+- `internal/config/singbox.go`：`CheckSingBoxConfig(ctx, binary, workDir, configDir)` —— **workDir 必须与 supervisor 的 rundir 一致**，且同时设 `cmd.Dir` 与传 `-D`（check 与 run 的解析基准必须相同，否则校验的是与实际运行时无关的东西）
+- `internal/shell/runner.go`：`RunnerConfig.Dir`，由 `wireup_daemon.go` 传 rundir（startup.sh / teardown.sh 是 iptables 关键路径）
+
+`ipset` / `ip` / `nvram` 这类不读 cwd 的命令不受影响，无需设置。
+
 ### Applier 4 阶段（stage → validate → commit → restart）
 合并到统一 `Applier.Apply(ctx, kinds)`，`ApplyAll = Apply(AllResources)`；sync_loop 与 CLI `update --apply`（HTTP `/api/v1/apply?resource=...`）都走它。**关键：一轮最多调 1 次 `sup.Restart`**——避免 sing-box+zoo+cn 同时变化时分别调 Restart 被 2s 节流闸门丢动作。
 

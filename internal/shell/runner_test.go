@@ -3,6 +3,7 @@ package shell
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -58,5 +59,23 @@ func TestRunnerStreamsStderrLineByLine(t *testing.T) {
 	defer mu.Unlock()
 	if len(lines) != 3 || lines[0] != "line1" {
 		t.Fatalf("stderr lines: %v", lines)
+	}
+}
+
+// TestRunnerRunsInConfiguredDir 守住 startup.sh / teardown.sh 的 cwd 确定性。
+// 真机事故：daemon 长跑期间 U 盘掉线重挂载，进程 cwd 落在已被 lazy umount 的
+// 旧 fs 上（dmesg: "comm bash: error -5 reading directory block"），脚本继承的
+// 就是这个失效 cwd。Dir 显式指向 rundir 后，脚本不再受 daemon 自身 cwd 影响。
+func TestRunnerRunsInConfiguredDir(t *testing.T) {
+	dir := t.TempDir()
+	r := NewRunner(RunnerConfig{Bash: "/bin/bash", Dir: dir})
+
+	var stderr strings.Builder
+	if err := r.Run(context.Background(), "pwd 1>&2", &stderr); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	// macOS 的 t.TempDir() 在 /var → /private/var 符号链接下，取 base 名比较即可。
+	if !strings.Contains(stderr.String(), filepath.Base(dir)) {
+		t.Fatalf("脚本 cwd = %q, 期望在 %q 下", strings.TrimSpace(stderr.String()), dir)
 	}
 }

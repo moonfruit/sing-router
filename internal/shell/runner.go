@@ -15,6 +15,7 @@ import (
 type RunnerConfig struct {
 	Bash string            // bash 可执行路径，默认 "/bin/bash"
 	Env  map[string]string // 注入子进程的环境变量
+	Dir  string            // 脚本的 cwd；空则继承当前进程（仅测试与 CLI 一次性调用场景）
 }
 
 // Runner 通过 stdin 把脚本喂给 bash 跑，避免落盘。
@@ -52,6 +53,10 @@ func (r *Runner) Run(ctx context.Context, script string, capture io.Writer) erro
 	cmd := exec.CommandContext(ctx, r.cfg.Bash, "-s")
 	cmd.Stdin = strings.NewReader(script)
 	cmd.Env = r.envSlice()
+	// daemon 是长跑进程：它启动时 chdir 到的那个目录可能在存储掉线重挂载后
+	// 变成悬空引用（真机上出现过，bash 在其中读目录直接拿 EIO）。显式指定
+	// cwd 让脚本每次都从 rundir 路径重新解析，不吃 daemon 自身 cwd 的旧账。
+	cmd.Dir = r.cfg.Dir
 	// 与 sing-box 同样的理由：把 shell 进程隔离到独立 pgid，shell 退出时的
 	// SIGHUP 不会半途打断 startup.sh / teardown.sh。
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
