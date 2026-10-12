@@ -99,7 +99,7 @@ func runSyncOnce(ctx context.Context, u *syncpkg.Updater, em *clef.Emitter, appl
 	if p.skip() {
 		em.Info("apply", "apply.retry.cooldown",
 			"skip apply {Kinds}: same inputs failed at {FailedAt}; retry after {RetryAt}",
-			map[string]any{"Kinds": p.Kinds, "FailedAt": st.LastFailure.At, "RetryAt": p.CoolUntil})
+			map[string]any{"Kinds": resourceNames(p.Kinds), "FailedAt": st.LastFailure.At, "RetryAt": p.CoolUntil})
 		return
 	}
 	kinds := p.Kinds
@@ -123,13 +123,22 @@ func runSyncOnce(ctx context.Context, u *syncpkg.Updater, em *clef.Emitter, appl
 	}
 	if len(p.Retry) > 0 {
 		em.Info("apply", "apply.retry", "retrying resources not yet applied: {Kinds}",
-			map[string]any{"Kinds": p.Retry})
+			map[string]any{"Kinds": resourceNames(p.Retry)})
 	}
 	if err := applier.Apply(ctx, kinds); err != nil {
 		em.Warn("apply", "apply.failed",
 			"apply resources {Kinds}: {Err}",
-			map[string]any{"Kinds": kinds, "Err": err.Error()})
+			map[string]any{"Kinds": resourceNames(kinds), "Err": err.Error()})
 	}
+}
+
+// resourceNames 把资源转成名字，日志里 Kinds 才不会是 [0,1] 这样的枚举值。
+func resourceNames(kinds []Resource) []string {
+	names := make([]string, len(kinds))
+	for i, k := range kinds {
+		names[i] = k.String()
+	}
+	return names
 }
 
 // applyRetryCooldown 是同一组输入 apply 失败后再次重试前的冷却时长。
