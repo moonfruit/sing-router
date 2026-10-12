@@ -42,8 +42,10 @@
       { "query_type": ["A", "AAAA"], "server": "dns-fakeip", "rewrite_ttl": 1 }
     ],
     "final": "dns-proxy",
+    "optimistic": true,
     "reverse_mapping": true,
-    "strategy": "prefer_ipv6"
+    "strategy": "prefer_ipv6",
+    "timeout": "5s"
   },
   "route": {
     "rules": [
@@ -66,29 +68,12 @@
             "type": "logical",
             "mode": "or",
             "rules": [
-              { "network": "tcp", "port": 853 },
-              { "protocol": ["http", "tls"], "rule_set": "DoH" }
+              { "port": 853 },
+              { "protocol": ["http", "tls", "quic"], "rule_set": "DoH" }
             ]
           }
         ],
         "action": "reject"
-      },
-      {
-        "type": "logical",
-        "mode": "and",
-        "rules": [
-          { "rule_set": ["GeoIP@CN", "GeoSites@CN"], "invert": true },
-          {
-            "type": "logical",
-            "mode": "or",
-            "rules": [
-              { "network": "udp", "port": 853 },
-              { "protocol": "quic", "rule_set": "DoH" }
-            ]
-          }
-        ],
-        "action": "reject",
-        "method": "drop"
       },
       { "protocol": ["bittorrent", "ntp", "stun"], "outbound": "DIRECT" },
       {

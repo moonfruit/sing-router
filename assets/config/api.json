@@ -5,7 +5,7 @@
       "type": "api",
       "tag": "api-in",
       "listen": "::",
-      "listen_port": 10000,
+      "listen_port": 9999,
       "access_control_allow_private_network": true,
       "dashboard": {
         "enabled": true,
