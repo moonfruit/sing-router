@@ -183,6 +183,53 @@ func TestUpdateSingBox_SkipsExtractWhenETagHitAndBinExists(t *testing.T) {
 	}
 }
 
+// StageSingBoxFromTarball 不联网，只用已落盘的 var/sing-box.tar.gz 重新暂存——
+// 供 daemon 重试上一轮 apply 失败（已回滚）的 sing-box。
+func TestStageSingBoxFromTarball(t *testing.T) {
+	u, rundir := newTestUpdater(t, "http://unused.invalid")
+	tarball := filepath.Join(rundir, "var", "sing-box.tar.gz")
+	binPath := filepath.Join(rundir, "bin", "sing-box")
+	staging := binPath + ".new"
+
+	// 没下载过压缩包 → 无事可做
+	if staged, err := u.StageSingBoxFromTarball(); err != nil || staged {
+		t.Fatalf("no tarball: staged=%v err=%v", staged, err)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(tarball), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(tarball, makeFakeSingBoxTarball(t, "new-binary"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(binPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(binPath, []byte("old-binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	staged, err := u.StageSingBoxFromTarball()
+	if err != nil || !staged {
+		t.Fatalf("differs from bin: staged=%v err=%v", staged, err)
+	}
+	if data, _ := os.ReadFile(staging); string(data) != "new-binary" {
+		t.Fatalf("staging = %q", data)
+	}
+
+	// 现行二进制已与压缩包一致 → 不留 staging
+	if err := os.WriteFile(binPath, []byte("new-binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	staged, err = u.StageSingBoxFromTarball()
+	if err != nil || staged {
+		t.Fatalf("identical: staged=%v err=%v", staged, err)
+	}
+	if _, err := os.Stat(staging); !os.IsNotExist(err) {
+		t.Fatal("identical binary must not leave staging behind")
+	}
+}
+
 func TestUpdateSingBox_ReextractsWhenBinMissing(t *testing.T) {
 	tarball := makeFakeSingBoxTarball(t, "binary-content")
 	routes := map[string]*fakeRoute{

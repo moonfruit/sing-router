@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 // applierFixture 在 tmpdir 里搭出 Applier 期望的目录结构，并返回一些常用路径。
@@ -356,4 +357,60 @@ func readState(t *testing.T, rundir string) applyState {
 		t.Fatalf("unmarshal state: %v", err)
 	}
 	return s
+}
+
+// TestApply_RecordsFailureThenInputsOnSuccess：失败时记下本轮输入指纹（供 sync_loop
+// 判断"同样的输入刚失败过"）；成功后清掉失败记录，并记下已生效的压缩包 / zoo.raw sha。
+func TestApply_RecordsFailureThenInputsOnSuccess(t *testing.T) {
+	fx := newApplierFixture(t)
+	tarball := filepath.Join(fx.rundir, "var", "sing-box.tar.gz")
+	zooRaw := filepath.Join(fx.rundir, "var", "zoo.raw.json")
+	writeFile(t, tarball, "TARBALL")
+	writeFile(t, zooRaw, "ZOO_RAW")
+	writeFile(t, fx.binPath, "OLD_BIN")
+	writeFile(t, fx.stagePath, "NEW_BIN")
+
+	checkErr := errors.New("synthetic check failure")
+	a := &Applier{
+		Rundir:      fx.rundir,
+		ConfigDir:   fx.configDir,
+		Emitter:     newTestEmitter(t),
+		Restart:     func(ctx context.Context) error { return nil },
+		CheckConfig: func(ctx context.Context) error { return checkErr },
+		PreprocessZoo: func() error {
+			writeFile(t, fx.zooPath, "NEW_ZOO")
+			return nil
+		},
+	}
+
+	before := time.Now()
+	_ = a.Apply(context.Background(), []Resource{ResourceSingBox, ResourceZoo})
+	st := readState(t, fx.rundir)
+	if st.LastFailure == nil {
+		t.Fatal("failed apply must record LastFailure")
+	}
+	if st.LastFailure.Fingerprint != a.currentInputs().fingerprint() {
+		t.Errorf("fingerprint mismatch: %+v", st.LastFailure)
+	}
+	if st.LastFailure.At.Before(before) {
+		t.Errorf("failure time not set: %v", st.LastFailure.At)
+	}
+	if st.SingBoxTarball != "" || st.ZooRaw != "" {
+		t.Errorf("failed apply must not mark inputs applied: %+v", st)
+	}
+
+	// 重试：staging 被 revert 吃掉了，重新放一份（sync_loop 里由 StageSingBoxFromTarball 做）
+	writeFile(t, fx.stagePath, "NEW_BIN")
+	checkErr = nil
+	if err := a.Apply(context.Background(), []Resource{ResourceSingBox, ResourceZoo}); err != nil {
+		t.Fatalf("retry Apply: %v", err)
+	}
+	st = readState(t, fx.rundir)
+	if st.LastFailure != nil {
+		t.Errorf("success must clear LastFailure: %+v", st.LastFailure)
+	}
+	in := a.currentInputs()
+	if st.SingBoxTarball != in.Tarball || st.ZooRaw != in.ZooRaw || in.Tarball == "" || in.ZooRaw == "" {
+		t.Errorf("applied inputs not recorded: state=%+v inputs=%+v", st, in)
+	}
 }

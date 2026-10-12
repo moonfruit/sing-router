@@ -11,8 +11,11 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"time"
 
 	"github.com/moonfruit/sing2seq/clef"
+
+	"github.com/moonfruit/sing-router/internal/version"
 )
 
 // Resource 是 Applier 能识别的资源种类。
@@ -91,11 +94,50 @@ type Applier struct {
 
 // applyState 持久化到 var/apply-state.json，记录上次成功 apply 的各资源 sha256；
 // daemon 重启后读回，允许在下次 sync 时识别"上游 etag 变化但内容未变"的假信号。
+//
+// SingBoxTarball / ZooRaw 记录"已生效"的输入（下载落盘的原件）sha256。sync_loop
+// 拿它与当前落盘的输入比对：不一致即"待生效"，哪怕本轮 etag 没变也要重新 apply——
+// 否则一次失败回滚后，etag 不再变化，该资源就永远停在旧版本（cn.txt 的 CNTxt
+// 本就是输入 sha，同样参与比对）。
 type applyState struct {
-	SingBox     string `json:"sing_box,omitempty"`
-	ZooJSON     string `json:"zoo_json,omitempty"`
-	RuleSetJSON string `json:"rule_set_json,omitempty"`
-	CNTxt       string `json:"cn_txt,omitempty"`
+	SingBox        string        `json:"sing_box,omitempty"`
+	ZooJSON        string        `json:"zoo_json,omitempty"`
+	RuleSetJSON    string        `json:"rule_set_json,omitempty"`
+	CNTxt          string        `json:"cn_txt,omitempty"`
+	SingBoxTarball string        `json:"sing_box_tarball,omitempty"`
+	ZooRaw         string        `json:"zoo_raw,omitempty"`
+	LastFailure    *applyFailure `json:"last_failure,omitempty"`
+}
+
+// applyFailure 记录最近一次 apply 失败时的输入指纹。sync_loop 据此冷却：同样的
+// 输入（含 sing-router 版本）刚失败过就不立刻重试，免得每轮都重启-失败-回滚一遍。
+type applyFailure struct {
+	Fingerprint string    `json:"fingerprint"`
+	At          time.Time `json:"at"`
+}
+
+// applyInputs 是一轮 apply 的输入原件 sha256；文件不存在为空串。
+type applyInputs struct {
+	Tarball string // var/sing-box.tar.gz
+	ZooRaw  string // var/zoo.raw.json
+	CN      string // var/cn.txt
+}
+
+func (in applyInputs) fingerprint() string { return in.fingerprintWith(version.String()) }
+
+// fingerprintWith 把 sing-router 版本也算进指纹：修 bug 的新版本上线后，同样的
+// 输入可能就能成功了，应当立即重试而不是等冷却。
+func (in applyInputs) fingerprintWith(ver string) string {
+	return sha256Bytes([]byte(in.Tarball + "\n" + in.ZooRaw + "\n" + in.CN + "\n" + ver))
+}
+
+// currentInputs 读取当前落盘的输入原件 sha256。读失败按不存在处理（空串）。
+func (a *Applier) currentInputs() applyInputs {
+	h := func(rel string) string {
+		s, _ := fileSHA256(filepath.Join(a.Rundir, rel))
+		return s
+	}
+	return applyInputs{Tarball: h(tarballRelPath), ZooRaw: h(zooRawRelPath), CN: h(cnRelPath)}
 }
 
 const (
@@ -104,6 +146,9 @@ const (
 	zooFileName       = "zoo.json"
 	ruleSetFileName   = "rule-set.json"
 	singBoxRelPath    = "bin/sing-box"
+	tarballRelPath    = "var/sing-box.tar.gz"
+	zooRawRelPath     = "var/zoo.raw.json"
+	cnRelPath         = "var/cn.txt"
 )
 
 // ApplyAll 是 sync_loop 用的默认入口：处理 sing-box / zoo / cn.txt 三种资源。
@@ -129,7 +174,18 @@ func (a *Applier) Apply(ctx context.Context, kinds []Resource) error {
 	binPath := filepath.Join(a.Rundir, singBoxRelPath)
 	binStaging := filepath.Join(a.Rundir, singBoxRelPath+".new")
 	backupBinPath := filepath.Join(a.Rundir, applyBackupSubdir, "sing-box")
-	cnPath := filepath.Join(a.Rundir, "var", "cn.txt")
+	cnPath := filepath.Join(a.Rundir, cnRelPath)
+
+	// 任何未走到成功出口的返回都记一次失败指纹，供 sync_loop 冷却重试。
+	inputs := a.currentInputs()
+	succeeded := false
+	defer func() {
+		if !succeeded {
+			_ = a.updateApplyState(func(s *applyState) {
+				s.LastFailure = &applyFailure{Fingerprint: inputs.fingerprint(), At: time.Now()}
+			})
+		}
+	}()
 
 	// === 1) sing-box：staging 存在即认为待安装 ===
 	var (
@@ -237,11 +293,24 @@ func (a *Applier) Apply(ctx context.Context, kinds []Resource) error {
 		}
 	}
 
+	// 成功出口共用：记下本轮已生效的输入原件，清掉失败记录。
+	markApplied := func(s *applyState) {
+		if binChanged {
+			s.SingBoxTarball = inputs.Tarball
+		}
+		if wantZoo {
+			s.ZooRaw = inputs.ZooRaw
+		}
+		s.LastFailure = nil
+	}
+
 	// === 5) 任一资源真变化 → CheckConfig + Restart；否则 no-op return ===
 	if !zooDelta && !ruleDelta && !binDelta && !cnDelta {
 		a.cleanupBackup(backupBinPath, binBackedUp)
+		succeeded = true
 		// hash 没变也要更新 apply-state（避免下次 sync 因为快照空白反复尝试 commit）
 		_ = a.updateApplyState(func(s *applyState) {
+			markApplied(s)
 			if wantZoo {
 				s.ZooJSON = zooHashAfter
 				s.RuleSetJSON = ruleHashAfter
@@ -287,7 +356,9 @@ func (a *Applier) Apply(ctx context.Context, kinds []Resource) error {
 
 	// success
 	a.cleanupBackup(backupBinPath, binBackedUp)
+	succeeded = true
 	_ = a.updateApplyState(func(s *applyState) {
+		markApplied(s)
 		if binChanged {
 			s.SingBox = binHashAfter
 		}

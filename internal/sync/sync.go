@@ -121,21 +121,45 @@ func (u *Updater) updateSingBoxCommon(ctx context.Context) (stagingPath string, 
 		_ = os.Remove(stagingPath)
 		return stagingPath, false, version, nil
 	}
+	staged, err := stageFromTarball(tarballTarget, binTarget, stagingPath)
+	if err != nil {
+		return "", false, version, err
+	}
+	return stagingPath, staged, version, nil
+}
+
+// StageSingBoxFromTarball 不联网，把已落盘的 var/sing-box.tar.gz 重新解压到
+// bin/sing-box.new。供 daemon 重试"上一轮 apply 失败已回滚"的 sing-box：那之后
+// tarball etag 不再变，updateSingBoxCommon 永远走 304 捷径，不会再产生 staging。
+// 压缩包不存在、或其中二进制与现行一致时返回 false 且不留 staging。
+func (u *Updater) StageSingBoxFromTarball() (staged bool, err error) {
+	tarballTarget := filepath.Join(u.rundir, "var", "sing-box.tar.gz")
+	if !fileExists(tarballTarget) {
+		return false, nil
+	}
+	binTarget := filepath.Join(u.rundir, "bin", "sing-box")
+	return stageFromTarball(tarballTarget, binTarget, binTarget+".new")
+}
+
+// stageFromTarball 解压 tarball 到 stagingPath，与现行 binTarget 比对 sha256：
+// 一致则删 staging 返 false；不一致（或 binTarget 不存在）保留 staging 返 true。
+func stageFromTarball(tarballTarget, binTarget, stagingPath string) (bool, error) {
 	if err := extractSingBoxBinary(tarballTarget, stagingPath); err != nil {
-		return "", false, version, fmt.Errorf("extract sing-box: %w", err)
+		return false, fmt.Errorf("extract sing-box: %w", err)
 	}
-	if !binMissing {
-		same, err := sameFileSHA256(stagingPath, binTarget)
-		if err != nil {
-			_ = os.Remove(stagingPath)
-			return "", false, version, fmt.Errorf("compare sing-box sha256: %w", err)
-		}
-		if same {
-			_ = os.Remove(stagingPath)
-			return stagingPath, false, version, nil
-		}
+	if !fileExists(binTarget) {
+		return true, nil
 	}
-	return stagingPath, true, version, nil
+	same, err := sameFileSHA256(stagingPath, binTarget)
+	if err != nil {
+		_ = os.Remove(stagingPath)
+		return false, fmt.Errorf("compare sing-box sha256: %w", err)
+	}
+	if same {
+		_ = os.Remove(stagingPath)
+		return false, nil
+	}
+	return true, nil
 }
 
 // UpdateZoo 把 gitee 上的 config.json 拉到 var/zoo.raw.json，由 daemon 的 Preprocess

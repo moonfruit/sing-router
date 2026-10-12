@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"slices"
 	"time"
 
 	"github.com/moonfruit/sing2seq/clef"
@@ -88,28 +89,91 @@ func runSyncOnce(ctx context.Context, u *syncpkg.Updater, em *clef.Emitter, appl
 		return
 	}
 
-	// auto_apply 开启:只把本轮真正成功且 Changed 的资源交给 Apply 走 4 阶段，
-	// 合并到一次 Restart。避免无关资源（如旧的损坏 zoo.raw.json）阻塞本轮真变化
-	// 的资源 apply——若总是 ApplyAll，zoo preprocess 失败会让 cn.txt / sing-box
-	// 的 commit + restart 也被跳过。
-	var kinds []Resource
-	if r.SingBox.Err == nil && r.SingBox.Changed {
-		kinds = append(kinds, ResourceSingBox)
+	// auto_apply 开启:本轮 Changed 的资源 + 此前未能生效的资源（见 planApply）
+	// 合并成一次 Apply，最多一次 Restart。
+	st, err := applier.loadApplyState()
+	if err != nil {
+		em.Warn("apply", "apply.state.unreadable", "read apply-state: {Err}", map[string]any{"Err": err.Error()})
 	}
-	if r.Zoo.Err == nil && r.Zoo.Changed {
-		kinds = append(kinds, ResourceZoo)
+	p := planApply(r, st, applier.currentInputs(), time.Now())
+	if p.skip() {
+		em.Info("apply", "apply.retry.cooldown",
+			"skip apply {Kinds}: same inputs failed at {FailedAt}; retry after {RetryAt}",
+			map[string]any{"Kinds": p.Kinds, "FailedAt": st.LastFailure.At, "RetryAt": p.CoolUntil})
+		return
 	}
-	if r.CNList.Err == nil && r.CNList.Changed {
-		kinds = append(kinds, ResourceCN)
+	kinds := p.Kinds
+	if slices.Contains(p.Retry, ResourceSingBox) {
+		// 上次失败时 staging 已被回滚吃掉，且 etag 不变时 updater 不会再解压：从落盘的压缩包重新暂存。
+		staged, err := u.StageSingBoxFromTarball()
+		switch {
+		case err != nil:
+			em.Warn("apply", "apply.retry.stage_failed", "re-stage sing-box from tarball: {Err}",
+				map[string]any{"Err": err.Error()})
+			kinds = slices.DeleteFunc(kinds, func(k Resource) bool { return k == ResourceSingBox })
+		case !staged:
+			// 压缩包里的二进制其实已经装上了（如 CLI update 直接安装），补记即可。
+			tarball := applier.currentInputs().Tarball
+			_ = applier.updateApplyState(func(s *applyState) { s.SingBoxTarball = tarball })
+			kinds = slices.DeleteFunc(kinds, func(k Resource) bool { return k == ResourceSingBox })
+		}
 	}
 	if len(kinds) == 0 {
 		return
+	}
+	if len(p.Retry) > 0 {
+		em.Info("apply", "apply.retry", "retrying resources not yet applied: {Kinds}",
+			map[string]any{"Kinds": p.Retry})
 	}
 	if err := applier.Apply(ctx, kinds); err != nil {
 		em.Warn("apply", "apply.failed",
 			"apply resources {Kinds}: {Err}",
 			map[string]any{"Kinds": kinds, "Err": err.Error()})
 	}
+}
+
+// applyRetryCooldown 是同一组输入 apply 失败后再次重试前的冷却时长。
+const applyRetryCooldown = 24 * time.Hour
+
+// applyPlan 是一轮 sync 后的 apply 决策。
+type applyPlan struct {
+	Kinds     []Resource // 本轮要交给 Applier 的资源（含 Retry）
+	Retry     []Resource // 其中 etag 未变、但此前未能生效而重试的资源
+	CoolUntil time.Time  // 非零 = 同样的输入刚失败过，本轮跳过
+}
+
+func (p applyPlan) skip() bool { return !p.CoolUntil.IsZero() }
+
+// planApply 决定本轮 apply 哪些资源。只看 Changed（etag 变化）是不够的：一次 apply
+// 失败回滚后，上游 etag 不再变，该资源就永远不会被重试（2026-10 路由器 sing-box
+// 因此停在旧版两个月）。所以以"落盘输入 ≠ 已生效输入"为准，下载出错的资源除外。
+//
+// 为免坏版本每轮都重启-失败-回滚一遍：若当前输入指纹与上次失败相同，且失败不足
+// applyRetryCooldown，本轮跳过；输入或 sing-router 版本一变，指纹即不同，立即重试。
+func planApply(r syncpkg.AllResult, st applyState, in applyInputs, now time.Time) applyPlan {
+	var p applyPlan
+	consider := func(k Resource, item syncpkg.ItemResult, current, applied string) {
+		switch {
+		case item.Err != nil:
+		case item.Changed:
+			p.Kinds = append(p.Kinds, k)
+		case current != "" && current != applied:
+			p.Kinds = append(p.Kinds, k)
+			p.Retry = append(p.Retry, k)
+		}
+	}
+	consider(ResourceSingBox, r.SingBox, in.Tarball, st.SingBoxTarball)
+	consider(ResourceZoo, r.Zoo, in.ZooRaw, st.ZooRaw)
+	consider(ResourceCN, r.CNList, in.CN, st.CNTxt)
+	if len(p.Kinds) == 0 {
+		return p
+	}
+	if f := st.LastFailure; f != nil && f.Fingerprint == in.fingerprint() {
+		if until := f.At.Add(applyRetryCooldown); now.Before(until) {
+			return applyPlan{Kinds: p.Kinds, CoolUntil: until}
+		}
+	}
+	return p
 }
 
 // generateZashboard 本地生成 ui/zashboard-settings.json(source-ip-label-list)。

@@ -106,6 +106,8 @@ sha256 真变化闸门保留（"是否触发 Restart"的判断）：gitee 上游
 
 失败语义（all-or-nothing）：CheckConfig 失败 → 整轮放弃 commit；Restart 失败 → revert 全部已 commit 的资源 → `RestartForce` 绕节流把旧配置拉回来。
 
+失败后的重试（`sync_loop.go::planApply`）：sync_loop 不只看 etag `Changed`，而是比对"落盘输入原件 sha（`var/sing-box.tar.gz` / `var/zoo.raw.json` / `var/cn.txt`）≠ apply-state 里已生效的 sha"——否则一次回滚后 etag 不再变，资源永远停在旧版（2026-10 真机 sing-box 因此卡在 1.14 两个月）。sing-box 重试时由 `StageSingBoxFromTarball` 从落盘压缩包重新暂存。失败时 apply-state 记 `last_failure`（输入 sha + sing-router 版本的指纹）：指纹相同且不足 24h 则跳过，免得坏版本每轮都重启-失败-回滚；输入或 sing-router 版本一变立即重试。**`sing-box check` 不报弃用项，`run` 才 FATAL**——check 通过不代表能起。
+
 ### zoo 预处理是"种子 → 用户配置 → 自动补 rule_set"链
 1. install 时把 `assets/config/zoo.json` 当种子写入 `config/zoo.json`（仅 1 个 outbound）。
 2. daemon 启动时若 `var/zoo.raw.json` 存在（由 sync 拉自 gitee `config.json`），`config.PreprocessZooFile` 按白名单提取 `outbounds` + `route.{rules,rule_set,final}` 写入 `config/zoo.json`；缺失即跳过（保留上次成功的 zoo.json）。
