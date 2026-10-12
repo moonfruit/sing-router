@@ -110,6 +110,52 @@ func TestPreprocessPassesThroughRuleSet(t *testing.T) {
 	}
 }
 
+// sing-box 1.14 起 remote rule_set 的 download_detour 已弃用，1.15 run 时直接
+// FATAL（check 却能过）。指向直连出站的直接删（交给 default_http_client），
+// 其余改写成 http_client.detour——sing-box 拒绝 detour 到空的 direct 出站。
+func TestPreprocessMigratesRuleSetDownloadDetour(t *testing.T) {
+	in := PreprocessInput{
+		Raw: zoo(t, map[string]any{
+			"outbounds": []any{
+				map[string]any{"type": "direct", "tag": "直连"},
+				map[string]any{"type": "selector", "tag": "proxy", "outbounds": []any{"直连"}},
+			},
+			"route": map[string]any{
+				"rule_set": []any{
+					map[string]any{"tag": "a", "type": "remote", "url": "https://x/a.srs", "download_detour": "DIRECT"},
+					map[string]any{"tag": "b", "type": "remote", "url": "https://x/b.srs", "download_detour": "proxy",
+						"http_client": "http-proxy"},
+					map[string]any{"tag": "c", "type": "remote", "url": "https://x/c.srs"},
+					map[string]any{"tag": "d", "type": "remote", "url": "https://x/d.srs", "download_detour": "proxy"},
+					map[string]any{"tag": "e", "type": "remote", "url": "https://x/e.srs", "download_detour": "直连"},
+				},
+			},
+		}),
+	}
+	res, err := Preprocess(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rs := mustParse(t, res.Rendered)["route"].(map[string]any)["rule_set"].([]any)
+	for _, e := range rs {
+		if _, ok := e.(map[string]any)["download_detour"]; ok {
+			t.Fatalf("download_detour must be removed: %#v", e)
+		}
+	}
+	for _, i := range []int{0, 2, 4} {
+		if _, ok := rs[i].(map[string]any)["http_client"]; ok {
+			t.Fatalf("rule_set[%d]: direct/absent detour must not produce http_client, got %#v", i, rs[i])
+		}
+	}
+	if b := rs[1].(map[string]any); b["http_client"] != "http-proxy" {
+		t.Fatalf("b: existing http_client must win, got %#v", b)
+	}
+	d := rs[3].(map[string]any)
+	if hc, _ := d["http_client"].(map[string]any); hc["detour"] != "proxy" {
+		t.Fatalf("d: download_detour should migrate to http_client.detour, got %#v", d)
+	}
+}
+
 // ---- outbound collision ----
 
 func TestPreprocessRejectsOutboundTagCollision(t *testing.T) {

@@ -104,6 +104,7 @@ func Preprocess(in PreprocessInput) (*PreprocessResult, error) {
 			return nil, &PreprocessError{Stage: "parse_rule_set", Err: err}
 		}
 	}
+	migrateRuleSetDownloadDetour(ruleSetEntries, outbounds)
 
 	stats := PreprocessStats{
 		OutboundCount: len(outbounds),
@@ -134,6 +135,44 @@ func Preprocess(in PreprocessInput) (*PreprocessResult, error) {
 		return nil, &PreprocessError{Stage: "render", Err: err}
 	}
 	return &PreprocessResult{Rendered: rendered, Stats: stats}, nil
+}
+
+// builtinDirectTag 是 outbounds.json 里内置的 direct 出站。
+const builtinDirectTag = "DIRECT"
+
+// migrateRuleSetDownloadDetour 去掉 remote rule_set 的 download_detour。上游 zoo
+// 仍在用这个旧字段，而 sing-box 1.14 起将其弃用、1.15 在 run 时直接 FATAL——
+// `sing-box check` 却照常通过，于是 Applier 每次升级 sing-box 都 check 成功、
+// Restart 失败、整轮回滚。
+//
+// 指向 direct 出站的直接删掉，交给 route.default_http_client（http.json 里的
+// http-direct）；不能改写成 http_client.detour，sing-box 会以 "detour to an
+// empty direct outbound makes no sense" 拒绝。其余改写为 http_client.detour。
+// 已有 http_client 时以它为准，只删旧字段。
+func migrateRuleSetDownloadDetour(entries []map[string]any, outbounds []map[string]any) {
+	direct := map[string]struct{}{builtinDirectTag: {}}
+	for _, o := range outbounds {
+		if o["type"] == "direct" {
+			if tag, _ := o["tag"].(string); tag != "" {
+				direct[tag] = struct{}{}
+			}
+		}
+	}
+	for _, e := range entries {
+		detour, ok := e["download_detour"]
+		if !ok {
+			continue
+		}
+		delete(e, "download_detour")
+		if _, has := e["http_client"]; has {
+			continue
+		}
+		s, _ := detour.(string)
+		if _, isDirect := direct[s]; s == "" || isDirect {
+			continue
+		}
+		e["http_client"] = map[string]any{"detour": s}
+	}
 }
 
 // renderZoo 输出顺序固定为 outbounds → route.{rule_set, rules, final}
