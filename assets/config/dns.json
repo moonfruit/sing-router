@@ -14,6 +14,8 @@
       { "tag": "dns-one", "type": "h3", "server": "one.one.one.one", "detour": "🔰 默认出口" },
       { "tag": "dns-cloudflare", "type": "h3", "server": "cloudflare-dns.com", "detour": "🔰 默认出口" },
       { "tag": "dns-proxy", "type": "group", "servers": ["dns-one", "dns-cloudflare"] },
+      // Ash
+      { "tag": "dns-ash", "type": "https", "server": "edge1.ashnet.cc", "domain_resolver": "dns-resolver" },
       // Hosts
       { "tag": "dns-hosts", "type": "hosts", "path": ["config/hosts", "/etc/hosts"] },
       // Local
@@ -28,6 +30,8 @@
       // Local
       { "preferred_by": "dns-local", "server": "dns-local", "rewrite_ttl": 3600 },
       { "rule_set": "Lan", "action": "predefined", "rcode": "NXDOMAIN" },
+      // Ash
+      { "domain_suffix": ".staticlane.org", "server": "dns-ash" },
       // Public
       { "query_type": "AAAA", "rule_set": "PublicDNS", "action": "predefined" },
       { "rule_set": "PublicDNS", "server": "dns-resolver" },
@@ -67,10 +71,7 @@
           {
             "type": "logical",
             "mode": "or",
-            "rules": [
-              { "port": 853 },
-              { "protocol": ["http", "tls", "quic"], "rule_set": "DoH" }
-            ]
+            "rules": [{ "port": 853 }, { "protocol": ["http", "tls", "quic"], "rule_set": "DoH" }]
           }
         ],
         "action": "reject"
